@@ -1,0 +1,1189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>每周日程表</title>
+  <link rel="stylesheet" href="/api/worktable/template/dshell.css" />
+  <style>
+    /* —— 明暗主题：默认暗色，html[data-tt-theme='light'] 时切亮色（与 DSH 系统同步，见脚本） —— */
+    :root { color-scheme: dark; }
+    html[data-tt-theme='dark'] { color-scheme: dark; }
+    html[data-tt-theme='light'] { color-scheme: light; }
+    :root {
+      --tt-line-half: rgba(255,255,255,.05);
+      --tt-line-hour: rgba(255,255,255,.10);
+      --tt-input-bg: rgba(0,0,0,.35);
+      --tt-today-bg: rgba(79,142,247,.05);
+      --tt-accent: #4f8ef7;
+    }
+    html[data-tt-theme='light'] {
+      --tt-line-half: rgba(0,0,0,.05);
+      --tt-line-hour: rgba(0,0,0,.09);
+      --tt-input-bg: rgba(255,255,255,.78);
+      --tt-today-bg: rgba(57,100,254,.06);
+      --tt-accent: #3964fe;
+    }
+    /* 主题切换平滑过渡（尊重减少动态偏好） */
+    @media (prefers-reduced-motion: no-preference) {
+      html { transition: background-color .25s ease, color .25s ease; }
+      .tt-day, .tt-gutter, .tt-headrow, .dshell-card { transition: background-color .25s ease, border-color .25s ease; }
+    }
+
+    /* —— 仅自造日程表网格所需的最小样式，其余复用 dshell 皮肤 —— */
+    /* —— 顶栏：标题 + 导航合并为一张卡片，结构更聚拢 —— */
+    .tt-topbar { display: flex; flex-direction: column; gap: 10px; }
+    .tt-toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between; }
+    .tt-nav { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+    .tt-toolbar-right { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-left:auto; }
+    .tt-field { display:flex; align-items:center; gap:5px; font-size:12px; color:var(--dsw-alias-label-secondary,#9aa4b2); }
+    .tt-field select, .tt-date { width:auto; }
+    .tt-statusbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    @media (max-width: 760px) {
+      .tt-toolbar-right { width:100%; margin-left:0; }
+      .tt-nav { width:100%; }
+    }
+
+    .tt-legend { display:flex; gap:16px; flex-wrap:wrap; margin:2px 2px -4px; }
+    .tt-lg { display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--dsw-alias-label-secondary,#9aa4b2); }
+    .tt-lg-dot { width:9px; height:9px; border-radius:3px; flex:none; }
+
+    .tt-grid-wrap { border:1px solid var(--dsw-alias-border-l1,#262b36); border-radius:10px; overflow:auto; max-height:calc(100vh - 330px); }
+    .tt-grid { min-width:940px; }
+    .tt-headrow, .tt-bodyrow { display:grid; grid-template-columns:56px repeat(7, minmax(118px,1fr)); }
+    .tt-headrow { position:sticky; top:0; z-index:7; background-color:var(--dsw-alias-bg-base,#0b0e14); border-bottom:1px solid var(--dsw-alias-border-l1,#262b36); }
+    .tt-corner { border-right:1px solid var(--dsw-alias-border-l1,#262b36); }
+    .tt-dayhead { padding:6px 2px; text-align:center; border-left:1px solid var(--dsw-alias-border-l1,#262b36); }
+    .tt-dayname { font-size:12px; font-weight:600; color:var(--dsw-alias-label-primary,#e6e8eb); }
+    .tt-daydate { font-size:10.5px; color:var(--dsw-alias-label-tertiary,#6b7280); }
+    .tt-gutter { position:relative; border-right:1px solid var(--dsw-alias-border-l1,#262b36); background-color:var(--dsw-alias-fill-l1,rgba(255,255,255,.02)); }
+    .tt-day { position:relative; border-left:1px solid var(--dsw-alias-border-l1,#262b36); background-image:linear-gradient(to bottom, var(--tt-line-half) 1px, transparent 1px), linear-gradient(to bottom, var(--tt-line-hour) 1px, transparent 1px); }
+    .tt-hourlabel { position:absolute; right:6px; transform:translateY(-50%); font-size:10px; color:var(--dsw-alias-label-tertiary,#6b7280); line-height:1; }
+    .tt-nowdot { position:absolute; right:2px; background:#f85149; color:#fff; font-size:9.5px; padding:0 4px; border-radius:6px; transform:translateY(-50%); z-index:5; white-space:nowrap; }
+    .tt-today { background-color:var(--tt-today-bg); }
+    .tt-today .tt-dayname { color:var(--dsw-alias-state-accent-primary,#4f8ef7); }
+
+    .tt-ev { position:absolute; border-radius:6px; border-left:3px solid; padding:2px 6px; overflow:hidden; cursor:pointer; font-size:11px; line-height:1.35; box-sizing:border-box; }
+    .tt-ev:hover { filter:brightness(1.2); z-index:3; }
+    /* 亮色背景下事件标题原色偏淡，加深一档保证对比度 */
+    html[data-tt-theme='light'] .tt-ev { filter:saturate(1.15) brightness(.92); }
+    html[data-tt-theme='light'] .tt-ev:hover { filter:saturate(1.25) brightness(1.02); }
+    .tt-ev-title { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tt-ev-time, .tt-ev-loc { opacity:.75; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--dsw-alias-label-secondary,#9aa4b2); }
+
+    .tt-now { position:absolute; left:0; right:0; height:2px; background:#f85149; z-index:4; pointer-events:none; }
+    .tt-now::before { content:''; position:absolute; left:-3px; top:-3px; width:8px; height:8px; border-radius:50%; background:#f85149; }
+    .tt-ev-input { width:100%; height:100%; min-width:0; box-sizing:border-box; background:var(--tt-input-bg); border:1px solid var(--dsw-alias-state-accent-primary,#4f8ef7); border-radius:4px; color:var(--dsw-alias-label-primary,#e6e8eb); font:inherit; font-size:11px; padding:0 4px; outline:none; }
+    /* 事件编辑器表单 */
+    .ed-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px 12px; }
+    .ed-field { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--dsw-alias-label-secondary,#9aa4b2); min-width:0; }
+    .ed-field input, .ed-field select { width:100%; }
+    .ed-days { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--dsw-alias-label-primary,#e6e8eb); }
+    .ed-days label { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div class="dshell">
+    <div class="dshell-card tt-topbar">
+      <div class="tt-toolbar">
+        <div>
+          <h1 class="dshell-title" id="ttTitle">每周日程表</h1>
+          <p class="dshell-sub" id="ttSub"></p>
+        </div>
+        <div class="tt-statusbar">
+          <span id="ttStatus">加载中…</span>
+          <span class="dshell-badge dshell-badgeDone" id="saveStatus" style="display:none"></span>
+        </div>
+      </div>
+      <div class="dshell-divider"></div>
+      <div class="tt-toolbar">
+        <div class="tt-nav">
+          <button class="dshell-btn dshell-btnGhost" id="btnPrev">‹ 上周</button>
+          <button class="dshell-btn" id="btnToday">今天</button>
+          <button class="dshell-btn dshell-btnGhost" id="btnNext">下周 ›</button>
+          <input type="date" class="dshell-input tt-date" id="datePicker" />
+        </div>
+        <div class="tt-toolbar-right">
+          <label class="tt-field">时间范围
+            <select class="dshell-input" id="rangeSel"></select>
+          </label>
+          <label class="tt-field">行高
+            <select class="dshell-input" id="zoomSel">
+              <option value="36">紧凑</option>
+              <option value="48" selected>标准</option>
+              <option value="64">宽松</option>
+              <option value="80">超大</option>
+            </select>
+          </label>
+          <button class="dshell-btn dshell-btnGhost" id="btnRefresh">刷新</button>
+          <button class="dshell-btn dshell-btnGhost" id="btnEdit">编辑数据</button>
+          <button class="dshell-btn" id="btnMobile">手机访问</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 手机访问（独立实现）：由 mobile-server.mjs 托管，与 dsh-pocket 的扫码访问完全分离 -->
+    <div class="dshell-card" id="mobilePanel" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <h2 class="dshell-sub" style="margin:0;font-size:12.5px">手机访问 · 扫码查看并修改日程（独立服务，非 dsh-pocket）</h2>
+        <button class="dshell-btn dshell-btnGhost" id="btnCloseMobile" style="padding:3px 10px;font-size:11.5px">收起</button>
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px">
+        <div style="flex:1;min-width:220px;display:flex;gap:12px;align-items:flex-start;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:10px;padding:10px">
+          <canvas id="qrLan" width="10" height="10" style="width:132px;height:132px;flex:none;border-radius:8px;background:#fff"></canvas>
+          <div style="min-width:0;flex:1">
+            <div style="font-size:12.5px;font-weight:600">局域网访问</div>
+            <div class="dshell-muted" id="qrLanUrl" style="word-break:break-all;margin-top:4px">获取中…</div>
+            <div class="dshell-muted" id="qrLanState" style="margin-top:4px"></div>
+          </div>
+        </div>
+        <div style="flex:1;min-width:220px;display:flex;gap:12px;align-items:flex-start;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:10px;padding:10px">
+          <canvas id="qrWan" width="10" height="10" style="width:132px;height:132px;flex:none;border-radius:8px;background:#fff"></canvas>
+          <div style="min-width:0;flex:1">
+            <div style="font-size:12.5px;font-weight:600">公网访问</div>
+            <div class="dshell-muted" id="qrWanUrl" style="word-break:break-all;margin-top:4px">获取中…</div>
+            <div class="dshell-muted" id="qrWanState" style="margin-top:4px"></div>
+          </div>
+        </div>
+      </div>
+      <div class="dshell-divider"></div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="dshell-btn dshell-btnGhost" id="btnTunnelToggle" disabled>打开公网隧道</button>
+        <input class="dshell-input" id="pinInput" type="password" placeholder="安全密码（4-64 位，仅保存在本机）" style="width:230px" autocomplete="new-password" />
+        <button class="dshell-btn" id="btnPinSave">保存密码</button>
+        <button class="dshell-btn dshell-btnGhost" id="btnPinClear" style="display:none">清除密码</button>
+        <span class="dshell-muted" id="adminMsg"></span>
+      </div>
+      <div class="dshell-muted" style="margin-top:8px">
+        本入口由工作区内的 <b>mobile-server.mjs</b> 独立服务提供（默认端口 3190，不占用、不依赖 dsh web 3080 与 dsh-pocket 3081-3090）。
+        手机与电脑连同一局域网时扫「局域网访问」；人在外面扫「公网访问」（点上方按钮开关隧道）。
+        安全密码仅保存在本机 <b>.mobile-srv/settings.json</b>：设置后手机端读写日程需输入该密码；公网隧道必须设置密码后才可开启。
+        手机页提供：选择日期、查看当日日程、点击日程弹出对话框修改并保存（直接写回 schedule.json）。
+      </div>
+    </div>
+
+    <div class="tt-legend" id="ttLegend"></div>
+    <div class="dshell-grid" id="ttStats"></div>
+
+    <div class="dshell-card" id="editPanel" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <h2 class="dshell-sub" style="margin:0;font-size:12.5px">数据编辑（临时预览，不写回文件；正式修改请直接编辑 schedule.json）</h2>
+        <div style="display:flex;gap:8px">
+          <button class="dshell-btn" id="btnApply">应用</button>
+          <button class="dshell-btn dshell-btnGhost" id="btnReset">恢复文件</button>
+        </div>
+      </div>
+      <textarea id="jsonArea" class="dshell-textarea" style="height:220px;font-family:ui-monospace,Consolas,monospace;margin-top:8px;white-space:pre" spellcheck="false"></textarea>
+      <div class="dshell-muted" id="editMsg" style="margin-top:4px"></div>
+    </div>
+
+    <div class="dshell-card" id="editorPanel" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <h2 class="dshell-sub" style="margin:0;font-size:13px">编辑事件（改完点保存，自动写回 schedule.json）</h2>
+        <span class="dshell-badge" id="edTypeBadge"></span>
+      </div>
+      <div class="dshell-divider"></div>
+      <div class="ed-grid">
+        <label class="ed-field">名称<input class="dshell-input" id="eName" placeholder="事件名称" /></label>
+        <label class="ed-field">类型
+          <select class="dshell-input" id="eType">
+            <option value="weekly">每周重复</option>
+            <option value="once">一次性</option>
+            <option value="custom">自定义间隔</option>
+          </select>
+        </label>
+        <label class="ed-field">开始时间<input type="time" class="dshell-input" id="eStart" /></label>
+        <label class="ed-field">结束时间<input type="time" class="dshell-input" id="eEnd" /></label>
+      </div>
+      <div class="ed-grid" style="margin-top:8px">
+        <label class="ed-field" id="ewWrap">重复星期
+          <select class="dshell-input" id="eWeekday">
+            <option value="1">每周一</option><option value="2">每周二</option><option value="3">每周三</option>
+            <option value="4">每周四</option><option value="5">每周五</option><option value="6">每周六</option>
+            <option value="7">每周日</option>
+          </select>
+        </label>
+        <label class="ed-field" id="edWrap">日期<input type="date" class="dshell-input" id="eDate" /></label>
+        <label class="ed-field" id="eiWrap">重复间隔<input type="number" min="1" step="1" class="dshell-input" id="eInterval" /></label>
+        <label class="ed-field" id="euWrap">间隔单位
+          <select class="dshell-input" id="eUnit">
+            <option value="day">天</option><option value="week">周</option><option value="month">月</option>
+          </select>
+        </label>
+        <label class="ed-field" id="ersWrap">重复起始日期<input type="date" class="dshell-input" id="eRStart" /></label>
+      </div>
+      <div class="ed-field" id="edaysWrap" style="margin-top:8px">重复星期（按间隔循环）
+        <span class="ed-days" id="eDays"></span>
+      </div>
+      <div class="ed-grid" style="margin-top:8px">
+        <label class="ed-field">地点<input class="dshell-input" id="eLoc" placeholder="可选" /></label>
+        <label class="ed-field">备注<input class="dshell-input" id="eNote" placeholder="可选" /></label>
+      </div>
+      <div class="ed-grid" style="margin-top:8px">
+        <label class="ed-field">提前提醒（分钟）
+          <input class="dshell-input" id="eLead" type="number" min="0" max="1440" step="1" placeholder="默认 20；0 = 不提醒" />
+        </label>
+        <div class="ed-field" style="justify-content:flex-end"><span class="dshell-muted" style="font-size:11px">手机端在事件开始前该时间弹出提醒（字段 remindLead）</span></div>
+      </div>
+      <div class="dshell-muted" id="edMsg" style="margin-top:6px"></div>
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+        <button class="dshell-btn" id="btnSaveEdit">保存</button>
+        <button class="dshell-btn dshell-btnGhost" id="btnCancelEdit">取消</button>
+        <button class="dshell-btn dshell-btnGhost" id="btnDeleteEdit" style="margin-left:auto;color:#f85149">删除此事件</button>
+      </div>
+    </div>
+
+    <div class="dshell-card" id="detailPanel" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <h2 class="dshell-sub" style="margin:0;font-size:13px" id="dTitle"></h2>
+        <span class="dshell-badge" id="dType"></span>
+      </div>
+      <div class="dshell-divider"></div>
+      <div class="dshell-kv">
+        <div class="dshell-kvRow"><span class="dshell-kvKey">时间</span><span class="dshell-kvValue" id="dTime"></span></div>
+        <div class="dshell-kvRow"><span class="dshell-kvKey">重复</span><span class="dshell-kvValue" id="dRepeat"></span></div>
+        <div class="dshell-kvRow"><span class="dshell-kvKey">地点</span><span class="dshell-kvValue" id="dLoc"></span></div>
+        <div class="dshell-kvRow"><span class="dshell-kvKey">备注</span><span class="dshell-kvValue" id="dNote"></span></div>
+      </div>
+      <div style="margin-top:8px"><button class="dshell-btn dshell-btnGhost" id="btnCloseDetail">关闭</button></div>
+    </div>
+
+    <div class="tt-grid-wrap">
+      <div class="tt-grid" id="ttGrid"></div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // ---------- 三种组件类型的元信息（图例与默认配色） ----------
+    var TYPE_META = {
+      weekly: { label: '每周重复', color: '#4f8ef7', desc: '每周同一时段（如课程）' },
+      once:   { label: '一次性',   color: '#f85149', desc: '仅当天一次（临时事务）' },
+      custom: { label: '自定义间隔', color: '#3fb950', desc: '按自定义间隔重复' }
+    };
+    var DAY_FULL = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+    // ---------- 内置示例（当找不到 schedule.json 时兜底） ----------
+    var FALLBACK_DATA = {
+      meta: { title: '我的每周日程表（内置示例）', weekStart: 1 },
+      events: [
+        { id: 'f1', title: '高等数学', type: 'weekly', weekday: 1, start: '08:00', end: '09:40', location: '教学楼A-301', color: '#4f8ef7' },
+        { id: 'f2', title: '数据结构', type: 'weekly', weekday: 3, start: '14:00', end: '15:40', location: '计科楼-412', color: '#0ea5e9' },
+        { id: 'f3', title: '临时面试', type: 'once', date: '2026-08-28', start: '15:00', end: '16:00', location: '就业指导中心', color: '#f85149' },
+        { id: 'f4', title: '健身', type: 'custom', start: '19:00', end: '20:00', location: '健身房', color: '#2bb673', repeat: { interval: 2, unit: 'day', start: '2026-08-24' } }
+      ]
+    };
+
+    // ---------- 状态 ----------
+    var data = null;
+    var source = '内置示例数据';
+    var cursor = startOfDay(new Date());
+    var rangeMode = 'auto';
+    var pxPerHour = 48;
+
+    // ---------- DOM ----------
+    function $(id) { return document.getElementById(id); }
+    var titleEl = $('ttTitle'), subEl = $('ttSub'), statusEl = $('ttStatus');
+    var gridEl = $('ttGrid'), rangeSel = $('rangeSel'), zoomSel = $('zoomSel');
+    var datePicker = $('datePicker'), legendEl = $('ttLegend'), statsEl = $('ttStats');
+    var detailEl = $('detailPanel'), editPanel = $('editPanel'), jsonArea = $('jsonArea'), editMsg = $('editMsg');
+
+    // ---------- 工具函数 ----------
+    function div(c) { var e = document.createElement('div'); if (c) e.className = c; return e; }
+    function startOfDay(d) { var x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+    function addDays(d, n) { var x = new Date(d); x.setDate(x.getDate() + n); return x; }
+    function fmtDate(d) {
+      var y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
+      return y + '-' + m + '-' + dd;
+    }
+    function parseDate(s) { var p = String(s).split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
+    function toMin(hhmm) { var p = String(hhmm || '0:0').split(':'); return (+p[0]) * 60 + (+p[1] || 0); }
+    function fmtMin(m) { var h = Math.floor(m / 60), mm = m % 60; return String(h).padStart(2, '0') + ':' + String(mm).padStart(2, '0'); }
+    function isoWeekday(d) { return (d.getDay() + 6) % 7 + 1; } // 周一=1 … 周日=7
+    function nowMinutes() { var n = new Date(); return n.getHours() * 60 + n.getMinutes(); }
+    function isToday(d) { return fmtDate(d) === fmtDate(new Date()); }
+    function hexToRgba(hex, a) {
+      var h = String(hex || '').replace('#', '');
+      if (h.length === 3) h = h.split('').map(function (c) { return c + c; }).join('');
+      if (h.length !== 6) return 'rgba(79,142,247,' + a + ')';
+      var r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+      return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+    }
+    function weekStart() { return (data && data.meta && data.meta.weekStart === 0) ? 0 : 1; }
+    function weekAnchor(d) {
+      var x = startOfDay(d);
+      var shift = (x.getDay() - weekStart() + 7) % 7;
+      x.setDate(x.getDate() - shift);
+      return x;
+    }
+
+    // 事件是否在某天发生
+    function occursOn(ev, day) {
+      var ds = fmtDate(day);
+      var type = ev.type || 'once';
+      if (type === 'weekly') return isoWeekday(day) === (ev.weekday || 1);
+      if (type === 'once') return ev.date === ds;
+      if (type === 'custom') {
+        var r = ev.repeat || {};
+        if (!r.start) return false;
+        if (ds < r.start) return false;
+        if (r.until && ds > r.until) return false;
+        var s = parseDate(r.start);
+        var diffDays = Math.round((day - s) / 86400000);
+        if (diffDays < 0) return false;
+        var interval = Math.max(1, parseInt(r.interval, 10) || 1);
+        var unit = r.unit || 'day';
+        if (unit === 'day') return diffDays % interval === 0;
+        if (unit === 'week') {
+          var weekDiff = Math.floor(diffDays / 7);
+          if (weekDiff % interval !== 0) return false;
+          if (Array.isArray(r.days) && r.days.length) return r.days.indexOf(isoWeekday(day)) !== -1;
+          return isoWeekday(day) === isoWeekday(s);
+        }
+        if (unit === 'month') {
+          var months = (day.getFullYear() - s.getFullYear()) * 12 + (day.getMonth() - s.getMonth());
+          if (months % interval !== 0) return false;
+          return day.getDate() === s.getDate();
+        }
+        return false;
+      }
+      return false;
+    }
+
+    // 某天事件排版：按开始时间排序，重叠事件自动分列
+    // 输入为该天的片段 { ref, s, e, cont }（跨天事件会被拆成当天段 + 次日续段）
+    function layoutDay(segs) {
+      var arr = segs.map(function (g) {
+        return Object.assign({}, g.ref, { _start: g.s, _end: g.e, _cont: !!g.cont, _ref: g.ref });
+      }).sort(function (a, b) { return a._start - b._start; });
+      var lanes = [];
+      arr.forEach(function (e) {
+        var lane = -1;
+        for (var i = 0; i < lanes.length; i++) { if (lanes[i] <= e._start) { lane = i; break; } }
+        if (lane === -1) { lane = lanes.length; lanes.push(e._end); } else { lanes[lane] = e._end; }
+        e._lane = lane;
+      });
+      return { list: arr, lanes: lanes.length };
+    }
+
+    function describeRepeat(ev) {
+      var t = ev.type || 'once';
+      if (t === 'weekly') return '每周重复 · 每' + (DAY_FULL[(ev.weekday || 1) - 1] || '周一');
+      if (t === 'once') return '一次性 · ' + (ev.date || '');
+      var r = ev.repeat || {};
+      var unitMap = { day: '天', week: '周', month: '月' };
+      var s = '每 ' + (parseInt(r.interval, 10) || 1) + ' ' + (unitMap[r.unit || 'day'] || '天');
+      if (r.unit === 'week' && Array.isArray(r.days) && r.days.length) {
+        s += '（' + r.days.map(function (d) { return DAY_FULL[(d - 1) % 7]; }).join('/') + '）';
+      }
+      s += ' · 自 ' + (r.start || '?');
+      if (r.until) s += ' 至 ' + r.until;
+      return s;
+    }
+
+    // ---------- 数据加载 ----------
+    function loadData() {
+      var qs = new URLSearchParams(location.search);
+      var file = qs.get('data') || 'schedule.json';
+      var candidates = [file, './' + file, '/api/worktable/site/' + file];
+      var loaded = null;
+      var i = 0;
+      function next() {
+        if (i >= candidates.length) { finish(); return; }
+        var url = candidates[i++];
+        fetch(url, { cache: 'no-store' }).then(function (res) {
+          if (res && res.ok) { return res.json(); }
+          throw new Error('skip');
+        }).then(function (json) {
+          loaded = json;
+          loadedUrl = url;
+          finish();
+        }).catch(function () { next(); });
+      }
+      function finish() {
+        var backup = null;
+        try { backup = localStorage.getItem(BACKUP_KEY); } catch (e) {}
+        if (backup) {
+          try { data = JSON.parse(backup); source = '本地备份（上次未写回文件）'; }
+          catch (err) { backup = null; }
+        }
+        if (!backup) {
+          if (loaded) {
+            data = loaded;
+            source = '已加载 ' + file;
+            var m = data.meta || {};
+            rangeMode = (m.timeStart && m.timeEnd) ? 'meta' : 'auto';
+          } else {
+            data = FALLBACK_DATA;
+            source = '内置示例（未找到 ' + file + '）';
+          }
+        } else {
+          var mm = data.meta || {};
+          rangeMode = (mm.timeStart && mm.timeEnd) ? 'meta' : 'auto';
+        }
+        render();
+        if (backup) save(); // 尝试把上次未写回的数据同步到文件
+      }
+      next();
+    }
+
+    // ---------- 明暗主题与 DSH 系统同步 ----------
+    // dshell.css 的 --dsw-alias-* 只有暗色兜底值；iframe 与 DSH 主界面同源，
+    // 因此直接读取父窗口主题（body[data-ds-dark-theme] / 背景亮度）并实时监听变化。
+    var LIGHT_VARS = {
+      '--dsw-alias-bg-base': '#f9fafb',
+      '--dsw-alias-label-primary': '#0f1115',
+      '--dsw-alias-label-secondary': '#61666b',
+      '--dsw-alias-label-tertiary': '#81858c',
+      '--dsw-alias-border-l1': '#e4e6e9',
+      '--dsw-alias-border-l2': '#d4d7db',
+      '--dsw-alias-fill-l1': 'rgba(0,0,0,.02)',
+      '--dsw-alias-state-accent-primary': '#3964fe'
+    };
+
+    function ttLumIsDark(r, g, b) { return (0.2126 * r + 0.7152 * g + 0.0722 * b) < 128; }
+
+    function ttParentDark() {
+      try {
+        var doc = window.parent.document;
+        var els = [doc.body, doc.documentElement];
+        for (var i = 0; i < els.length; i++) {
+          var el = els[i];
+          if (!el) continue;
+          if (el.hasAttribute && el.hasAttribute('data-ds-dark-theme')) return true; // DSH 暗色标记
+          var bg = '';
+          try { bg = getComputedStyle(el).backgroundColor; } catch (e) {}
+          var m = bg && bg.match(/rgba?\(([^)]+)\)/);
+          if (m) {
+            var p = m[1].split(/[\s,]+/).map(parseFloat);
+            if (p.length >= 3 && p[3] !== 0) return ttLumIsDark(p[0], p[1], p[2]);
+          }
+        }
+        return false; // 父页面可访问且无暗色标记 → 亮色主题
+      } catch (e) { return null; } // 跨域/独立打开时不可访问
+    }
+
+    function ttDetectTheme() {
+      var pd = ttParentDark();
+      if (pd !== null) return pd;
+      // 父页面不可访问（独立打开/跨域）：跟随系统偏好。
+      // 不再读取自身的 --dsw-alias-bg-base 判断——dshell.css 自带暗色兜底值，会导致永远判暗。
+      try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) { return true; }
+    }
+
+    // 解析 --dsw-alias-bg-base 的实际亮度（dshell.css 自带暗色兜底值，不能只看变量是否存在）
+    function ttResolvedBgDark() {
+      var v = '';
+      try { v = getComputedStyle(document.documentElement).getPropertyValue('--dsw-alias-bg-base').trim(); } catch (e) {}
+      if (!v) return true;
+      var mHex = v.match(/^#([0-9a-f]{6}|[0-9a-f]{3})$/i);
+      var mRgb = v.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i);
+      if (mHex) {
+        var h = mHex[1]; if (h.length === 3) h = h.split('').map(function (c) { return c + c; }).join('');
+        return ttLumIsDark(parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16));
+      }
+      if (mRgb) return ttLumIsDark(+mRgb[1], +mRgb[2], +mRgb[3]);
+      return true;
+    }
+
+    var ttOwnLight = false; // 亮色变量是否由本页注入（防止读到自己注入的值后误删，造成亮→暗闪变）
+
+    function ttApplyTheme(dark) {
+      var root = document.documentElement;
+      var want = dark ? 'dark' : 'light';
+      root.setAttribute('data-tt-theme', want); // 无变化时也先设置，保持幂等
+      var styleEl = document.getElementById('tt-light-vars');
+      if (!dark) {
+        // 仅在尚未注入时检测一次：亮色主题但 dshell 变量仍是暗色兜底（DSH 未注入亮色值）→ 补一组亮色变量。
+        // 注入后不再复查——否则 ttResolvedBgDark() 读到的是自己注入的亮色值，会误判“DSH 已注入”而移除，
+        // 跌回暗色兜底，下一轮又注入，形成亮↔暗振荡。
+        if (!ttOwnLight && ttResolvedBgDark()) {
+          if (!styleEl) { styleEl = document.createElement('style'); styleEl.id = 'tt-light-vars'; document.head.appendChild(styleEl); }
+          var css = 'html[data-tt-theme="light"]{';
+          Object.keys(LIGHT_VARS).forEach(function (k) { css += k + ':' + LIGHT_VARS[k] + ';'; });
+          styleEl.textContent = css + '}';
+          ttOwnLight = true;
+        }
+      } else if (styleEl && styleEl.parentNode) {
+        // 切回暗色 → 移除本地亮色覆盖
+        styleEl.parentNode.removeChild(styleEl);
+        ttOwnLight = false;
+      }
+    }
+
+    function ttSyncTheme() { ttApplyTheme(ttDetectTheme()); }
+
+    // 父页面主题变化（属性/样式/类名）实时同步
+    try {
+      if (window.parent && window.parent.document && window.MutationObserver) {
+        var ttObs = new MutationObserver(ttSyncTheme);
+        [window.parent.document.body, window.parent.document.documentElement].forEach(function (el) {
+          if (el) ttObs.observe(el, { attributes: true, attributeFilter: ['data-ds-dark-theme', 'class', 'style'] });
+        });
+      }
+    } catch (e) {}
+    try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ttSyncTheme); } catch (e) {}
+    setInterval(ttSyncTheme, 5000); // 轮询兜底
+    ttSyncTheme();
+
+    // ---------- 点击就地编辑 + 持久化 ----------
+    var SAVE_PATH = 'D:\\tools\\auto_timetable\\schedule.json';
+    var BACKUP_KEY = 'tt-schedule-backup';
+    var loadedUrl = null; // 记录读取成功的数据文件地址，供保存后回读校验
+
+    function setSaveStatus(text, ok) {
+      var el = $('saveStatus');
+      el.textContent = text;
+      el.className = ok ? 'dshell-badge dshell-badgeDone' : 'dshell-badge dshell-badgeWait';
+      el.style.display = 'inline-flex';
+    }
+
+    function save() {
+      var json = JSON.stringify(data, null, 2);
+      fetch('/api/worktable/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: SAVE_PATH, content: json })
+      }).then(function (res) {
+        if (!res || !res.ok) throw new Error('write failed');
+        // 写后读回校验，确认内容完整落盘（防止写入竞态导致文件截断）
+        var vurl = loadedUrl || 'schedule.json';
+        return fetch(vurl, { cache: 'no-store' }).then(function (r) {
+          if (!r || !r.ok) throw new Error('verify failed');
+          return r.text();
+        }).then(function (txt) {
+          var ok = false;
+          try { ok = !!txt && txt.length >= 10 && !!JSON.parse(txt); } catch (e) {}
+          if (!ok) throw new Error('verify failed');
+          try { localStorage.removeItem(BACKUP_KEY); } catch (e) {}
+          setSaveStatus('已保存到 schedule.json', true);
+        });
+      }).catch(function () {
+        try { localStorage.setItem(BACKUP_KEY, json); } catch (e) {}
+        setSaveStatus('已存本地备份（服务端写入失败）', false);
+      });
+    }
+
+    // ---------- 事件编辑器（名称 / 时间 / 重复间隔 / 备注，就地修改并保存） ----------
+    var editTarget = null;
+
+    function edShow(id, on) { $(id).style.display = on ? '' : 'none'; }
+
+    function edSyncVisibility() {
+      var t = $('eType').value;
+      edShow('ewWrap', t === 'weekly');
+      edShow('edWrap', t === 'once');
+      var c = t === 'custom';
+      edShow('eiWrap', c); edShow('euWrap', c); edShow('ersWrap', c);
+      edShow('edaysWrap', c && $('eUnit').value === 'week');
+      var badge = $('edTypeBadge');
+      badge.textContent = TYPE_META[t] ? TYPE_META[t].label : t;
+    }
+
+    function edFail(msg) {
+      var el = $('edMsg');
+      el.textContent = msg;
+      el.style.color = '#f85149';
+    }
+
+    function openEditor(ev) {
+      editTarget = ev;
+      $('eName').value = ev.title || '';
+      $('eType').value = ev.type || 'once';
+      $('eWeekday').value = String(ev.weekday || 1);
+      var today = fmtDate(new Date());
+      $('eDate').value = ev.date || today;
+      var r = ev.repeat || {};
+      $('eInterval').value = Math.max(1, parseInt(r.interval, 10) || 1);
+      $('eUnit').value = r.unit || 'day';
+      $('eRStart').value = r.start || today;
+      var daysWrap = $('eDays');
+      daysWrap.innerHTML = '';
+      for (var i = 1; i <= 7; i++) {
+        var lab = document.createElement('label');
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'ed-day';
+        cb.value = String(i);
+        if (Array.isArray(r.days) && r.days.indexOf(i) > -1) cb.checked = true;
+        lab.appendChild(cb);
+        lab.appendChild(document.createTextNode(DAY_FULL[i - 1]));
+        daysWrap.appendChild(lab);
+      }
+      $('eStart').value = ev.start || '08:00';
+      $('eEnd').value = ev.end || '09:00';
+      $('eLoc').value = ev.location || '';
+      $('eNote').value = ev.note || '';
+      $('eLead').value = (typeof ev.remindLead === 'number' && isFinite(ev.remindLead)) ? ev.remindLead : '';
+      $('edMsg').textContent = '';
+      edSyncVisibility();
+      $('editorPanel').style.display = 'block';
+      $('editorPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      $('eName').focus();
+    }
+
+    function closeEditor() {
+      editTarget = null;
+      $('editorPanel').style.display = 'none';
+    }
+
+    function saveEdit() {
+      var ev = editTarget;
+      if (!ev) return;
+      var name = String($('eName').value || '').trim();
+      var start = $('eStart').value;
+      var end = $('eEnd').value;
+      var t = $('eType').value;
+      if (!name) { edFail('名称不能为空'); return; }
+      if (!start || !end) { edFail('请填写开始与结束时间'); return; }
+      if (toMin(end) === toMin(start)) { edFail('结束时间不能等于开始时间（跨天日程请让结束时间小于开始时间，如 23:00–01:00）'); return; }
+      var weekday = null, date = null, rep = null;
+      if (t === 'weekly') {
+        weekday = parseInt($('eWeekday').value, 10) || 1;
+      } else if (t === 'once') {
+        date = $('eDate').value;
+        if (!date) { edFail('请选择一次性事件的日期'); return; }
+      } else {
+        var interval = Math.max(1, parseInt($('eInterval').value, 10) || 1);
+        var unit = $('eUnit').value;
+        var rs = $('eRStart').value;
+        if (!rs) { edFail('请选择重复起始日期'); return; }
+        rep = { interval: interval, unit: unit, start: rs };
+        if (ev.repeat && ev.repeat.until) rep.until = ev.repeat.until; // 保留已有结束日期
+        if (unit === 'week') {
+          var days = [];
+          var cbs = document.querySelectorAll('#eDays .ed-day');
+          for (var i = 0; i < cbs.length; i++) { if (cbs[i].checked) days.push(parseInt(cbs[i].value, 10)); }
+          if (!days.length) { edFail('按周重复时请至少勾选一个星期'); return; }
+          rep.days = days;
+        }
+      }
+      // 校验全部通过后再写回原对象（保证失败时不破坏数据）
+      ev.title = name;
+      ev.type = t;
+      ev.start = start;
+      ev.end = end;
+      ev.location = String($('eLoc').value || '').trim();
+      ev.note = String($('eNote').value || '').trim();
+      var leadVal = parseInt($('eLead').value, 10);
+      if (!isNaN(leadVal) && leadVal >= 0 && leadVal <= 1440) ev.remindLead = leadVal; // 手机端提前提醒分钟数
+      else delete ev.remindLead; // 留空/非法 → 回落默认 20 分钟
+      if (t === 'weekly') { ev.weekday = weekday; delete ev.date; delete ev.repeat; }
+      else if (t === 'once') { ev.date = date; delete ev.weekday; delete ev.repeat; }
+      else { ev.repeat = rep; delete ev.weekday; delete ev.date; }
+      closeEditor();
+      render();
+      save();
+    }
+
+    $('eType').onchange = edSyncVisibility;
+    $('eUnit').onchange = edSyncVisibility;
+    $('btnSaveEdit').onclick = saveEdit;
+    $('btnCancelEdit').onclick = closeEditor;
+    $('btnDeleteEdit').onclick = function () {
+      var ev = editTarget;
+      if (!ev) return;
+      if (!window.confirm('确定删除事件「' + (ev.title || '未命名') + '」？此操作会写回 schedule.json。')) return;
+      var arr = (data && data.events) || [];
+      var i = arr.indexOf(ev);
+      if (i > -1) arr.splice(i, 1);
+      closeEditor();
+      render();
+      save();
+    };
+    $('eName').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveEdit(); } });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && editTarget && $('editorPanel').style.display !== 'none') closeEditor();
+    });
+
+    // ---------- 渲染 ----------
+    function render() {
+      if (!data) { data = FALLBACK_DATA; source = '内置示例数据'; }
+      var m = data.meta || {};
+      titleEl.textContent = m.title || '每周日程表';
+      document.title = m.title || '每周日程表';
+
+      var srcBadge = document.createElement('span');
+      srcBadge.className = (source.indexOf('内置') > -1) ? 'dshell-badge dshell-badgeWait' : 'dshell-badge dshell-badgeDone';
+      srcBadge.textContent = source;
+      statusEl.className = ''; // 容器不保留徽章类，防止徽章套徽章（双层绿点）
+      statusEl.innerHTML = '';
+      statusEl.appendChild(srcBadge);
+
+      var anchor = weekAnchor(cursor);
+      var days = [];
+      for (var i = 0; i < 7; i++) days.push(addDays(anchor, i));
+
+      var evs = data.events || [];
+      // 跨天（跨午夜）支持：end <= start 视为次日结束。
+      // 第一步：先按「列」收集片段——当天段写入本列，续段写入下一列（idx+1），
+      // 之后再统一排版。注意不能在遍历当列时直接 push 续段，否则会渲染到当天顶部。
+      var rawDays = days.map(function () { return []; });
+      days.forEach(function (d, idx) {
+        evs.forEach(function (ev) {
+          if (!occursOn(ev, d)) return;
+          var s = toMin(ev.start), e = toMin(ev.end);
+          if (e <= s) {
+            rawDays[idx].push({ ref: ev, s: s, e: 1440 });
+            if (idx < 6) rawDays[idx + 1].push({ ref: ev, s: 0, e: e, cont: true });
+          } else {
+            rawDays[idx].push({ ref: ev, s: s, e: e });
+          }
+        });
+      });
+      // 第一列（周一）：补上来自上周最后一天跨午夜事件的续段
+      (function () {
+        var prev = addDays(days[0], -1);
+        evs.forEach(function (ev) {
+          if (occursOn(ev, prev) && toMin(ev.end) <= toMin(ev.start)) {
+            rawDays[0].push({ ref: ev, s: 0, e: toMin(ev.end), cont: true });
+          }
+        });
+      })();
+      var perDay = rawDays.map(function (segs) { return layoutDay(segs); });
+      var allVisible = [];
+      perDay.forEach(function (p) { allVisible = allVisible.concat(p.list); });
+
+      // 时间范围
+      var rStart, rEnd;
+      if (rangeMode === 'meta') { rStart = toMin(m.timeStart); rEnd = toMin(m.timeEnd); }
+      else if (rangeMode === '0624') { rStart = 360; rEnd = 1440; }
+      else if (rangeMode === '0024') { rStart = 0; rEnd = 1440; }
+      else {
+        if (allVisible.length) {
+          var mn = Infinity, mx = -Infinity;
+          allVisible.forEach(function (e) { if (e._start < mn) mn = e._start; if (e._end > mx) mx = e._end; });
+          mn = Math.max(0, mn - 60); mx = Math.min(1440, mx + 60);
+          rStart = Math.floor(mn / 15) * 15; rEnd = Math.ceil(mx / 15) * 15;
+        } else { rStart = 480; rEnd = 1200; }
+      }
+      var pxPerMin = pxPerHour / 60;
+      var H = Math.round((rEnd - rStart) * pxPerMin);
+
+      subEl.textContent = fmtDate(days[0]) + ' – ' + fmtDate(days[6]) + ' · 本周 ' + allVisible.length + ' 个事件';
+      datePicker.value = fmtDate(cursor);
+      renderLegend();
+      renderStats(perDay);
+      renderRangeSelect();
+
+      // 网格
+      gridEl.innerHTML = '';
+      var head = div('tt-headrow');
+      head.appendChild(div('tt-corner'));
+      days.forEach(function (d, idx) {
+        var hd = div('tt-dayhead' + (isToday(d) ? ' tt-today' : ''));
+        var nm = div('tt-dayname'); nm.textContent = DAY_FULL[isoWeekday(d) - 1]; // 按实际日期取名，避免表头与列错位
+        var dt = div('tt-daydate'); dt.textContent = (d.getMonth() + 1) + '/' + d.getDate();
+        hd.appendChild(nm); hd.appendChild(dt); head.appendChild(hd);
+      });
+      gridEl.appendChild(head);
+
+      var body = div('tt-bodyrow');
+      var gutter = div('tt-gutter');
+      gutter.style.height = H + 'px';
+      for (var t = Math.ceil(rStart / 60) * 60; t < rEnd; t += 60) {
+        var lbl = div('tt-hourlabel');
+        lbl.style.top = ((t - rStart) * pxPerMin) + 'px';
+        lbl.textContent = fmtMin(t);
+        gutter.appendChild(lbl);
+      }
+      var nowMin = nowMinutes();
+      if (nowMin >= rStart && nowMin <= rEnd) {
+        var nd = div('tt-nowdot');
+        nd.style.top = ((nowMin - rStart) * pxPerMin) + 'px';
+        nd.textContent = fmtMin(nowMin);
+        gutter.appendChild(nd);
+      }
+      body.appendChild(gutter);
+
+      days.forEach(function (d, idx) {
+        var cell = div('tt-day' + (isToday(d) ? ' tt-today' : ''));
+        cell.style.height = H + 'px';
+        cell.style.backgroundSize = '100% ' + (pxPerHour / 2) + 'px, 100% ' + pxPerHour + 'px';
+        perDay[idx].list.forEach(function (e) { cell.appendChild(makeEv(e, perDay[idx].lanes, rStart, pxPerMin)); });
+        if (isToday(d) && nowMin >= rStart && nowMin <= rEnd) {
+          var nl = div('tt-now'); nl.style.top = ((nowMin - rStart) * pxPerMin) + 'px'; cell.appendChild(nl);
+        }
+        body.appendChild(cell);
+      });
+      gridEl.appendChild(body);
+    }
+
+    function makeEv(ev, lanes, rStart, pxPerMin) {
+      var b = div('tt-ev');
+      var color = ev.color || (TYPE_META[ev.type] && TYPE_META[ev.type].color) || '#4f8ef7';
+      var top = (ev._start - rStart) * pxPerMin;
+      var h = Math.max(8, (ev._end - ev._start) * pxPerMin - 2);
+      var w = 100 / lanes;
+      b.style.top = top + 'px';
+      b.style.height = h + 'px';
+      b.style.left = (ev._lane * w) + '%';
+      b.style.width = w + '%';
+      b.style.background = hexToRgba(color, 0.16);
+      b.style.borderLeftColor = color;
+      var dispTitle = ev.title + (ev._cont ? '（次日续）' : '');
+      var crossMid = toMin(ev.end) <= toMin(ev.start);
+      var timeTxt = crossMid ? (fmtMin(toMin(ev.start)) + ' – 次日 ' + fmtMin(toMin(ev.end))) : (fmtMin(ev._start) + '–' + fmtMin(ev._end));
+      b.title = dispTitle + '\n' + timeTxt + (ev.location ? ' · ' + ev.location : '');
+      var t = div('tt-ev-title'); t.textContent = dispTitle; t.style.color = color;
+      b.appendChild(t);
+      if (h >= 26) { var tm = div('tt-ev-time'); tm.textContent = fmtMin(ev._start) + '–' + fmtMin(ev._end); b.appendChild(tm); }
+      if (ev.location && h >= 42) { var l = div('tt-ev-loc'); l.textContent = ev.location; b.appendChild(l); }
+      b.onclick = function () { openEditor(ev._ref || ev); };
+      b.ondblclick = function () { showDetail(ev); };
+      return b;
+    }
+
+    function renderLegend() {
+      legendEl.innerHTML = '';
+      Object.keys(TYPE_META).forEach(function (k) {
+        var meta = TYPE_META[k];
+        var it = div('tt-lg');
+        var dot = div('tt-lg-dot'); dot.style.background = meta.color;
+        var txt = document.createElement('span'); txt.textContent = meta.label + '（' + meta.desc + '）';
+        it.appendChild(dot); it.appendChild(txt);
+        legendEl.appendChild(it);
+      });
+    }
+
+    function renderStats(perDay) {
+      var list = [];
+      perDay.forEach(function (p) { p.list.forEach(function (e) { if (!e._cont) list.push(e); }); }); // 续段不重复计数
+      var c = { weekly: 0, once: 0, custom: 0 };
+      list.forEach(function (e) { c[e.type || 'once'] = (c[e.type || 'once'] || 0) + 1; });
+      var cards = [['本周事件', list.length], ['每周重复', c.weekly], ['一次性', c.once], ['自定义间隔', c.custom]];
+      statsEl.innerHTML = '';
+      cards.forEach(function (pair) {
+        var s = div('dshell-stat');
+        var l = div('dshell-statLabel'); l.textContent = pair[0];
+        var v = div('dshell-statValue'); v.textContent = pair[1];
+        s.appendChild(l); s.appendChild(v);
+        statsEl.appendChild(s);
+      });
+    }
+
+    function renderRangeSelect() {
+      var m = data.meta || {};
+      var opts = [{ v: 'auto', l: '自动适配' }];
+      if (m.timeStart && m.timeEnd) opts.push({ v: 'meta', l: m.timeStart + '–' + m.timeEnd + '（设定）' });
+      opts.push({ v: '0624', l: '06:00–24:00' }, { v: '0024', l: '00:00–24:00' });
+      rangeSel.innerHTML = '';
+      opts.forEach(function (o) {
+        var el = document.createElement('option');
+        el.value = o.v; el.textContent = o.l;
+        if (o.v === rangeMode) el.selected = true;
+        rangeSel.appendChild(el);
+      });
+    }
+
+    function showDetail(ev) {
+      var t = ev.type || 'once';
+      var meta = TYPE_META[t] || TYPE_META.once;
+      $('dTitle').textContent = ev.title;
+      var badge = $('dType');
+      badge.textContent = meta.label;
+      badge.className = 'dshell-badge';
+      if (t === 'once') badge.classList.add('dshell-badgeWait'); else badge.classList.add('dshell-badgeDone');
+      $('dTime').textContent = fmtMin(toMin(ev.start)) + ' – ' + fmtMin(toMin(ev.end)) + (toMin(ev.end) <= toMin(ev.start) ? '（跨天，次日结束）' : '');
+      $('dRepeat').textContent = describeRepeat(ev);
+      $('dLoc').textContent = ev.location || '—';
+      $('dNote').textContent = ev.note || '—';
+      detailEl.style.display = 'block';
+      detailEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // ---------- 事件绑定 ----------
+    $('btnPrev').onclick = function () { cursor = addDays(weekAnchor(cursor), -7); render(); };
+    $('btnNext').onclick = function () { cursor = addDays(weekAnchor(cursor), 7); render(); };
+    $('btnToday').onclick = function () { cursor = startOfDay(new Date()); render(); };
+    datePicker.onchange = function () {
+      if (datePicker.value) { var d = parseDate(datePicker.value); if (!isNaN(d)) { cursor = d; render(); } }
+    };
+    rangeSel.onchange = function () { rangeMode = rangeSel.value; render(); };
+    zoomSel.onchange = function () { pxPerHour = parseInt(zoomSel.value, 10) || 48; render(); };
+    $('btnRefresh').onclick = function () { loadData(); };
+    $('btnEdit').onclick = function () {
+      if (editPanel.style.display === 'none') {
+        editPanel.style.display = 'block';
+        jsonArea.value = JSON.stringify(data, null, 2);
+      } else { editPanel.style.display = 'none'; }
+    };
+    $('btnApply').onclick = function () {
+      try {
+        var d = JSON.parse(jsonArea.value);
+        data = d; source = '手动编辑（未写回文件）';
+        editMsg.textContent = '';
+        render();
+      } catch (err) {
+        editMsg.textContent = 'JSON 解析失败：' + err.message;
+        editMsg.style.color = '#f85149';
+      }
+    };
+    $('btnReset').onclick = function () { loadData(); };
+    $('btnCloseDetail').onclick = function () { detailEl.style.display = 'none'; };
+
+    // ---------- 启动 ----------
+    loadData();
+    setInterval(render, 60000); // 每分钟刷新当前时间线 / 今天高亮
+  })();
+  </script>
+
+  <!-- 手机访问面板：从独立服务 mobile-server.mjs 的 /api/status 获取地址，本地生成两个二维码（与 dsh-pocket 无关） -->
+  <script src="qrgen.js"></script>
+  <script>
+  (function () {
+    'use strict';
+    function $(id) { return document.getElementById(id); }
+
+    // 独立服务默认从 3190 起监听（被占自动 +1），依次探测
+    var PORT_CANDIDATES = [3190, 3191, 3192, 3193, 3194, 3195, 3196, 3197, 3198, 3199];
+    var foundPort = null;
+    var pollTimer = null;
+    var lastLanUrl = null, lastWanUrl = null;
+    var autoStartBusy = false; // 正在自动拉起（防重入）
+    var autoStartFails = 0;    // 连续失败计数（≥3 次后停止自动尝试，只提示手动）
+
+    // ---- 服务未运行时自动拉起：借用 dsh-worktable 的终端通道执行分离启动命令 ----
+    // Start-Process 建立独立 node 进程：页面/终端关闭都不影响服务运行。
+    function autoStartServer() {
+      if (autoStartBusy || autoStartFails >= 3) return Promise.resolve(false);
+      autoStartBusy = true;
+      setState('lan', '服务未运行，正在自动启动 mobile-server.mjs …', true);
+      var ws = null;
+      var p;
+      try {
+        ws = new WebSocket('ws://127.0.0.1:3080/api/worktable/term?cwd=' + encodeURIComponent('D:\\tools\\auto_timetable') + '&cols=80&rows=24');
+      } catch (e) {
+        p = Promise.resolve(false);
+      }
+      if (ws) {
+        p = new Promise(function (resolve) {
+          var done = false;
+          function finish(ok) {
+            if (done) return; done = true;
+            try { ws.close(); } catch (e) {}
+            resolve(ok);
+          }
+          ws.onopen = function () {
+            try {
+              ws.send("Start-Process node -ArgumentList 'mobile-server.mjs' -WorkingDirectory 'D:\\tools\\auto_timetable' -WindowStyle Hidden\r");
+            } catch (e) { finish(false); return; }
+            setTimeout(function () { finish(true); }, 1200); // 命令送达即算成功
+          };
+          ws.onerror = function () { finish(false); };
+          ws.onclose = function () { finish(false); };
+          setTimeout(function () { finish(false); }, 6000); // 总兜底
+        });
+      }
+      return p.then(function (ok) {
+        autoStartBusy = false;
+        if (!ok) autoStartFails++;
+        // 启动指令已发出 → 给服务约 1.6 秒完成监听，再重新扫描
+        return new Promise(function (r) { setTimeout(function () { r(ok); }, ok ? 1600 : 0); });
+      });
+    }
+
+    // 逐个端口探测 /api/status，找到独立服务
+    function serverStatus() {
+      var tryNext = function (i) {
+        if (i >= PORT_CANDIDATES.length) return Promise.reject(new Error('noserver'));
+        var port = PORT_CANDIDATES[i];
+        return fetch('http://127.0.0.1:' + port + '/api/status', { cache: 'no-store' }).then(function (r) {
+          if (!r.ok) throw new Error('http ' + r.status);
+          return r.json();
+        }).then(function (j) {
+          if (!j || j.ok !== true) throw new Error('bad status');
+          foundPort = port;
+          return j;
+        }).catch(function () { return tryNext(i + 1); });
+      };
+      // 已找到端口则优先直连（仍失败时重新扫描）
+      if (foundPort !== null) {
+        return fetch('http://127.0.0.1:' + foundPort + '/api/status', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .catch(function () { foundPort = null; return tryNext(0); });
+      }
+      return tryNext(0);
+    }
+
+    function adminCall(path, body) {
+      if (foundPort === null) return Promise.reject(new Error('noserver'));
+      return fetch('http://127.0.0.1:' + foundPort + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      }).then(function (r) { return r.json().then(function (j) { return { status: r.status, json: j }; }); });
+    }
+
+    function adminMsg(text, warn) {
+      var el = $('adminMsg');
+      el.textContent = text || '';
+      el.style.color = warn ? '#f85149' : '#3fb950';
+    }
+
+    function syncTunnelButton(s) {
+      var btn = $('btnTunnelToggle');
+      var pub = s.public || {};
+      var busy = pub.phase === 'downloading' || pub.phase === 'starting' || pub.phase === 'registering';
+      btn.disabled = busy || !foundPort;
+      if (busy) { btn.textContent = '隧道启动中…'; btn.className = 'dshell-btn dshell-btnGhost'; }
+      else if (pub.running) { btn.textContent = '关闭公网隧道'; btn.className = 'dshell-btn dshell-btnDanger'; }
+      else { btn.textContent = '打开公网隧道'; btn.className = 'dshell-btn'; }
+      $('btnPinClear').style.display = s.pinSet ? '' : 'none';
+    }
+
+    function drawQR(canvasId, text) {
+      var canvas = $(canvasId);
+      if (!canvas || !text || !window.qrgen) return false;
+      var qr = window.qrgen.encode(text);
+      if (!qr) return false;
+      var scale = 6, margin = 4;
+      var dim = (qr.size + margin * 2) * scale;
+      canvas.width = dim; canvas.height = dim;
+      var ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, dim, dim);
+      ctx.fillStyle = '#000';
+      for (var y = 0; y < qr.size; y++) {
+        for (var x = 0; x < qr.size; x++) {
+          if (qr.matrix[y][x]) ctx.fillRect((x + margin) * scale, (y + margin) * scale, scale, scale);
+        }
+      }
+      return true;
+    }
+
+    function clearQR(canvasId) {
+      var canvas = $(canvasId);
+      if (!canvas) return;
+      var ctx = canvas.getContext('2d');
+      canvas.width = canvas.height = 10;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, 10, 10);
+    }
+
+    function setState(which, text, warn) {
+      var el = $(which === 'lan' ? 'qrLanState' : 'qrWanState');
+      el.textContent = text || '';
+      el.style.color = warn ? '#d29922' : '';
+    }
+
+    function update() {
+      serverStatus().then(function (s) {
+        autoStartFails = 0; // 服务在线 → 重置自动拉起失败计数
+        // ---- 局域网 ----
+        if (s.lanUrl) {
+          var lanUrl = s.lanUrl.replace(/\/$/, '') + '/';
+          $('qrLanUrl').textContent = lanUrl;
+          if (lanUrl !== lastLanUrl) { lastLanUrl = lanUrl; drawQR('qrLan', lanUrl); }
+          setState('lan', '手机与电脑连同一 WiFi，扫码即开（端口 ' + s.port + '）', false);
+        } else {
+          $('qrLanUrl').textContent = '未检测到可用局域网 IPv4';
+          setState('lan', '请检查电脑的网络连接', true);
+          clearQR('qrLan');
+        }
+
+        // ---- 公网（独立隧道，面板按钮开关） ----
+        var pub = s.public || {};
+        if (pub.running && pub.url) {
+          var wanUrl = String(pub.url).replace(/\/$/, '') + '/';
+          $('qrWanUrl').textContent = wanUrl;
+          if (wanUrl !== lastWanUrl) { lastWanUrl = wanUrl; drawQR('qrWan', wanUrl); }
+          setState('wan', '人在外面也可访问（受安全密码保护）', false);
+        } else if (pub.phase === 'downloading' || pub.phase === 'starting' || pub.phase === 'registering') {
+          $('qrWanUrl').textContent = '公网隧道启动中…';
+          setState('wan', pub.detail || '', true);
+          clearQR('qrWan');
+        } else {
+          $('qrWanUrl').textContent = '公网隧道未开启';
+          setState('wan', s.pinSet
+            ? (pub.phase === 'error' ? ('隧道异常：' + (pub.detail || '') + '，可关闭后重开') : '点下方按钮开启')
+            : '需先设置安全密码，才能开启公网隧道', true);
+          clearQR('qrWan');
+        }
+        syncTunnelButton(s);
+        panelPinSet = !!s.pinSet;
+      }).catch(function () {
+        // 服务未运行 → 自动拉起一次，成功后下一轮轮询即显示二维码
+        $('qrLanUrl').textContent = '—';
+        $('qrWanUrl').textContent = '—';
+        $('btnTunnelToggle').disabled = true;
+        autoStartServer().then(function (started) {
+          if (started) { update(); return; } // 立即复查（已等待启动延时）
+          var msg = '自动启动失败：请在工作区手动执行 node mobile-server.mjs';
+          setState('lan', msg, true);
+          setState('wan', msg, true);
+          clearQR('qrLan'); clearQR('qrWan');
+        });
+      });
+    }
+
+    // ---- 管理操作：设置 / 清除安全密码、开关公网隧道 ----
+    var panelPinSet = false; // 随 /api/status 更新；已设密码时修改/清除需先验旧密码
+    $('btnPinSave').onclick = function () {
+      var pin = String($('pinInput').value || '');
+      if (pin && !/^\S{6,64}$/.test(pin)) { adminMsg('密码需为 6-64 位、不含空格', true); return; }
+      var payload = { pin: pin };
+      if (panelPinSet) {
+        var old = window.prompt('已设置过密码，请先输入当前密码：', '');
+        if (old === null) return;
+        payload.oldPin = old;
+      }
+      adminCall('/api/admin/pin', payload).then(function (r) {
+        if (r.json && r.json.ok) {
+          adminMsg(pin ? '安全密码已设置（仅保存在本机）' : '密码已设置', false);
+          $('pinInput').value = '';
+          update();
+        } else { adminMsg('设置失败：' + ((r.json && r.json.error) || r.status), true); }
+      }).catch(function () { adminMsg('独立服务未运行', true); });
+    };
+    $('btnPinClear').onclick = function () {
+      var payload = { pin: '' };
+      if (panelPinSet) {
+        var old = window.prompt('清除密码前请输入当前密码：', '');
+        if (old === null) return;
+        payload.oldPin = old;
+      }
+      adminCall('/api/admin/pin', payload).then(function (r) {
+        if (r.json && r.json.ok) {
+          // 清除密码前先关隧道，避免出现无保护公网
+          return adminCall('/api/admin/tunnel', { on: false }).then(function () {
+            adminMsg('安全密码已清除，公网隧道已关闭', false);
+            update();
+          });
+        }
+        adminMsg('清除失败：' + ((r.json && r.json.error) || r.status), true);
+      }).catch(function () { adminMsg('独立服务未运行', true); });
+    };
+    $('btnTunnelToggle').onclick = function () {
+      serverStatus().then(function (s) {
+        var wantOn = !(s.public && s.public.running);
+        if (wantOn && !s.pinSet) { adminMsg('请先设置安全密码，再开启公网隧道', true); return; }
+        adminMsg(wantOn ? '正在开启公网隧道…' : '正在关闭公网隧道…', false);
+        return adminCall('/api/admin/tunnel', { on: wantOn }).then(function (r) {
+          if (r.json && r.json.ok) { adminMsg(wantOn ? '隧道开启指令已发出' : '公网隧道已关闭', false); update(); }
+          else { adminMsg('操作失败：' + ((r.json && r.json.error) || r.status), true); update(); }
+        });
+      }).catch(function () { adminMsg('独立服务未运行', true); });
+    };
+
+    $('btnMobile').onclick = function () {
+      var panel = $('mobilePanel');
+      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+      if (panel.style.display !== 'none') {
+        autoStartFails = 0; // 每次展开面板都给自动拉起新机会
+        update();
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(update, 5000); // 地址可能变化（重启 / IP 变更），定期刷新
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    };
+    $('btnCloseMobile').onclick = function () {
+      $('mobilePanel').style.display = 'none';
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    };
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#4f6ef7" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <title>日程安排</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 14px; line-height: 1.6;
+      background: #f3f4f6; color: #111827;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0b0e14; color: #e6e8eb; }
+      .it { border-color: #262b36 !important; background: rgba(255,255,255,.02) !important; }
+      .muted { color: #9aa4b2 !important; }
+      .dlg { background: #12161e !important; }
+      input { background: rgba(255,255,255,.05); border-color: #262b36 !important; color: #e6e8eb; }
+    }
+    .wrap { max-width: 560px; margin: 0 auto; padding: 14px 14px calc(24px + env(safe-area-inset-bottom)); }
+    .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .head h1 { margin: 0; font-size: 17px; }
+    .head input[type="date"] {
+      padding: 6px 10px; border-radius: 8px; border: 1px solid #d1d5db; font: inherit; outline: none;
+    }
+    .list { display: flex; flex-direction: column; gap: 8px; }
+    .it {
+      display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px;
+      border: 1px solid #e5e7eb; border-radius: 10px; background: #fff; cursor: pointer;
+    }
+    .it:active { opacity: .7; }
+    .bar { width: 4px; align-self: stretch; border-radius: 2px; flex: none; }
+    .time { flex: none; width: 84px; font-size: 12.5px; font-weight: 600; line-height: 1.45; }
+    .time small { display: block; font-weight: 400; font-size: 10.5px; }
+    .title { font-size: 14px; font-weight: 600; word-break: break-all; }
+    .meta { font-size: 12px; margin-top: 2px; }
+    .muted { color: #6b7280; }
+    .empty { text-align: center; color: #6b7280; padding: 30px 0; }
+    .loading { text-align: center; color: #6b7280; padding: 30px 0; }
+
+    /* 对话框 */
+    .mask {
+      position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 10;
+      display: flex; align-items: flex-end; justify-content: center;
+    }
+    .dlg {
+      width: 100%; max-width: 560px; background: #fff; border-radius: 14px 14px 0 0;
+      padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+    }
+    .dlg h2 { margin: 0 0 4px; font-size: 15px; }
+    .dlg .rep { font-size: 12px; margin-bottom: 10px; }
+    .field { margin-bottom: 10px; }
+    .field label { display: block; font-size: 12px; margin-bottom: 3px; }
+    .field input {
+      width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid #d1d5db; font: inherit; outline: none;
+    }
+    .field input:focus { border-color: #4f6ef7; }
+    .row2 { display: flex; gap: 10px; }
+    .row2 .field { flex: 1; }
+    .btns { display: flex; gap: 10px; margin-top: 12px; }
+    .btn {
+      flex: 1; padding: 10px; border-radius: 8px; border: none; font: inherit; font-weight: 600; cursor: pointer;
+    }
+    .btnSave { background: #3fb950; color: #07130a; }
+    .btnCancel { background: transparent; border: 1px solid #d1d5db; color: inherit; }
+    .dlgMsg { min-height: 18px; font-size: 12px; margin-top: 8px; }
+    .ok { color: #2da44e; } .err { color: #cf222e; }
+
+    /* 对话电脑端 DSH */
+    .chat { margin-top: 18px; border-top: 1px solid rgba(128,128,128,.25); padding-top: 12px; }
+    .chat h3 { margin: 0 0 8px; font-size: 14px; }
+    .chatLog {
+      display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px;
+      max-height: 46vh; min-height: 120px; overflow-y: auto; overscroll-behavior: contain;
+      border: 1px solid rgba(128,128,128,.2); border-radius: 10px; padding: 8px;
+      scrollbar-width: thin;
+    }
+    .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; font-size: 13.5px; word-break: break-word; white-space: pre-wrap; }
+    .bUser { align-self: flex-end; background: #4f6ef7; color: #fff; border-bottom-right-radius: 4px; }
+    .bBot { align-self: flex-start; background: rgba(128,128,128,.14); border-bottom-left-radius: 4px; }
+    /* 问题 / 批准交互卡片 */
+    .qcard { align-self: stretch; border: 1px solid #4f6ef7; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+    .qcard.done { opacity: .55; border-color: rgba(128,128,128,.4); }
+    .qcard .qtitle { font-size: 13.5px; font-weight: 600; }
+    .qcard .qdetail { font-size: 12px; color: #6b7280; }
+    .qopts { display: flex; flex-direction: column; gap: 6px; }
+    .qopt { text-align: left; padding: 9px 11px; border-radius: 10px; border: 1px solid #d1d5db; background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+    .qopt small { display: block; color: #6b7280; font-size: 11.5px; }
+    .qopt.on { border-color: #4f6ef7; background: rgba(79,110,247,.12); }
+    .qcustom { padding: 8px 10px; border-radius: 10px; border: 1px solid #d1d5db; font: inherit; font-size: 13px; outline: none; background: transparent; color: inherit; }
+    .qsubmit { align-self: flex-end; padding: 8px 18px; border-radius: 10px; border: none; background: #3fb950; color: #07130a; font: inherit; font-weight: 600; cursor: pointer; }
+    .qsubmit:disabled { opacity: .5; }
+    .qbadge { font-size: 11.5px; color: #6b7280; }
+    /* 思考过程 / 工具调用（同步展示） */
+    .bReason {
+      align-self: flex-start; max-width: 88%; font-size: 12px; color: #6b7280;
+      background: rgba(128,128,128,.08); border-radius: 10px; padding: 4px 10px;
+    }
+    .bReason summary { cursor: pointer; font-size: 11.5px; }
+    .bReason .rBody { white-space: pre-wrap; word-break: break-word; max-height: 30vh; overflow-y: auto; margin-top: 4px; }
+    .bTool {
+      align-self: flex-start; font-size: 11.5px; color: #6b7280;
+      background: rgba(128,128,128,.08); border-radius: 8px; padding: 3px 8px;
+    }
+    /* 工具卡片：完整过程（入参 + 输出） */
+    .bToolCard {
+      align-self: flex-start; max-width: 95%; font-size: 12px; color: #6b7280;
+      background: rgba(128,128,128,.08); border-radius: 8px; padding: 4px 8px;
+    }
+    .bToolCard summary { cursor: pointer; font-size: 11.5px; word-break: break-all; }
+    .bToolCard .tstat { font-weight: 600; }
+    .bToolCard pre {
+      white-space: pre-wrap; word-break: break-word; max-height: 26vh; overflow-y: auto;
+      margin: 4px 0 0; background: rgba(128,128,128,.12); border-radius: 6px; padding: 6px; font-size: 11px;
+    }
+    .bToolCard .terr { color: #cf222e; }
+    .crow { display: flex; gap: 8px; }
+    .crow input { flex: 1; min-width: 0; padding: 9px 10px; border-radius: 10px; border: 1px solid #d1d5db; font: inherit; outline: none; }
+    .crow button { flex: none; padding: 9px 16px; border-radius: 10px; border: none; background: #3fb950; color: #07130a; font: inherit; font-weight: 600; }
+    .crow button:disabled { opacity: .5; }
+    .attachBtn { background: transparent !important; border: 1px solid #d1d5db !important; color: inherit !important; padding: 9px 12px !important; }
+    .thumbs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .thumb { position: relative; }
+    .thumb img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(128,128,128,.4); display: block; }
+    .thumb button {
+      position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; border-radius: 50%;
+      border: none; background: #cf222e; color: #fff; font-size: 12px; line-height: 1; cursor: pointer;
+    }
+    .chatHint { font-size: 11.5px; color: #6b7280; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <h1>日程安排</h1>
+      <input type="date" id="datePick" />
+    </div>
+    <!-- 系统级通知开关：Service Worker + Web Push（后台也能收到提醒） -->
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <button id="notifyBtn" style="padding:6px 12px;border-radius:10px;border:1px solid #d1d5db;background:transparent;color:inherit;font:inherit;font-size:12px">🔔 开启系统通知</button>
+      <span id="notifyState" style="font-size:11.5px;color:#6b7280">提醒为页面内弹窗</span>
+    </div>
+    <div class="loading" id="list">加载中…</div>
+
+    <!-- 输入框：连接电脑端 DSH，通过对话让 DSH 编辑日程表 -->
+    <div class="chat">
+      <h3>对话电脑端 DSH</h3>
+      <div class="chatLog" id="chatLog"></div>
+      <div class="thumbs" id="chatThumbs" style="display:none"></div>
+      <div class="crow">
+        <input id="chatIn" placeholder="例如：把周五的英语课改到 14:00" enterkeyhint="send" autocomplete="off" />
+        <button id="chatAttach" class="attachBtn" title="添加图片">📷</button>
+        <button id="chatSend">发送</button>
+      </div>
+      <input type="file" id="chatFile" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none" />
+      <div class="chatHint">用自然语言指示电脑端 DSH 修改 schedule.json，可附图片（拍照/相册，自动压缩），回复后日程自动刷新。</div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    var API_READ = '/api/schedule';
+    var API_WRITE = '/api/schedule';
+    var LEGACY_PIN_KEY = 'tt-mobile-pin'; // 旧版把密码存 localStorage，登录成功后清除
+
+    // 登录：验证密码后由服务端种 HttpOnly Cookie（密码不落 localStorage、不进 URL）
+    function login(pin) {
+      return fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ pin: pin })
+      }).then(function (r) {
+        if (r.status === 429) throw new Error('尝试次数过多，稍后再试');
+        if (!r.ok) throw new Error('badpin');
+        try { localStorage.removeItem(LEGACY_PIN_KEY); } catch (e) {}
+        return true;
+      });
+    }
+
+    // 密码错误 / 未登录时提示输入，返回密码或 null
+    function askPin(wasWrong) {
+      var msg = wasWrong ? '密码不正确，请重新输入：' : '本日程受安全密码保护，请输入密码：';
+      var pin = '';
+      try { window.prompt && (pin = window.prompt(msg, '')); } catch (e) { return null; }
+      return pin === null ? null : String(pin);
+    }
+
+    // 全局登录闸门：并发的多个 401（日程请求 / watch 流等）共享同一次弹窗与登录，
+    // 「密码不正确」文案只在真实登录失败后出现（修复：首登后仍弹"密码不正确"的误导）
+    var authOk = false;
+    var authInFlight = null;
+    function ensureAuth() {
+      if (authOk) return Promise.resolve(true);
+      if (authInFlight) return authInFlight;
+      authInFlight = new Promise(function (resolve) {
+        var attempt = function (wasWrong) {
+          var pin = askPin(wasWrong);
+          if (pin === null) { authInFlight = null; resolve(false); return; }
+          login(pin)
+            .then(function () { authOk = true; authInFlight = null; resolve(true); })
+            .catch(function (err) {
+              var msg = String(err && err.message || '');
+              if (msg.indexOf('稍后再试') > -1 || msg.indexOf('badpin') === -1) {
+                bubble('登录失败：' + (msg || '未知错误'), 'bot');
+                authInFlight = null;
+                resolve(false);
+                return;
+              }
+              attempt(true); // 只有真的输错才提示"密码不正确"并重问
+            });
+        };
+        attempt(false);
+      });
+      return authInFlight;
+    }
+
+    function apiFetch(url, opts) {
+      opts = opts || {};
+      opts.credentials = 'same-origin'; // 携带登录 Cookie
+      return fetch(url, opts).then(function (r) {
+        if (r.status !== 401) return r;
+        // 未登录：走全局闸门（并发去重），登录成功后重试一次
+        return ensureAuth().then(function (ok) {
+          return ok ? fetch(url, opts) : r;
+        });
+      });
+    }
+
+    var data = null;
+    var editEv = null; // 当前对话框正在编辑的事件
+
+    function $(id) { return document.getElementById(id); }
+    function pad(n) { return String(n).padStart(2, '0'); }
+    function fmtDate(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+    function parseDate(s) { var p = String(s).split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
+    function toMin(hhmm) { var p = String(hhmm || '0:0').split(':'); return (+p[0]) * 60 + (+p[1] || 0); }
+    function isoWeekday(d) { return (d.getDay() + 6) % 7 + 1; }
+    var DAY_FULL = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+    function occursOn(ev, day) {
+      var ds = fmtDate(day);
+      var type = ev.type || 'once';
+      if (type === 'weekly') return isoWeekday(day) === (ev.weekday || 1);
+      if (type === 'once') return ev.date === ds;
+      if (type === 'custom') {
+        var r = ev.repeat || {};
+        if (!r.start) return false;
+        if (ds < r.start) return false;
+        if (r.until && ds > r.until) return false;
+        var s = parseDate(r.start);
+        var diffDays = Math.round((day - s) / 86400000);
+        if (diffDays < 0) return false;
+        var interval = Math.max(1, parseInt(r.interval, 10) || 1);
+        var unit = r.unit || 'day';
+        if (unit === 'day') return diffDays % interval === 0;
+        if (unit === 'week') {
+          var weekDiff = Math.floor(diffDays / 7);
+          if (weekDiff % interval !== 0) return false;
+          if (Array.isArray(r.days) && r.days.length) return r.days.indexOf(isoWeekday(day)) !== -1;
+          return isoWeekday(day) === isoWeekday(s);
+        }
+        if (unit === 'month') {
+          var months = (day.getFullYear() - s.getFullYear()) * 12 + (day.getMonth() - s.getMonth());
+          if (months % interval !== 0) return false;
+          return day.getDate() === s.getDate();
+        }
+      }
+      return false;
+    }
+
+    function describeRepeat(ev) {
+      var t = ev.type || 'once';
+      if (t === 'weekly') return '每周重复 · ' + (DAY_FULL[(ev.weekday || 1) - 1] || '');
+      if (t === 'once') return '一次性 · ' + (ev.date || '');
+      var r = ev.repeat || {};
+      var unitMap = { day: '天', week: '周', month: '月' };
+      return '每 ' + (parseInt(r.interval, 10) || 1) + ' ' + (unitMap[r.unit || 'day'] || '天') + '重复 · 自 ' + (r.start || '?');
+    }
+
+    function load() {
+      apiFetch(API_READ, { cache: 'no-store' }).then(function (r) {
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.json();
+      }).then(function (json) {
+        data = json;
+        render();
+      }).catch(function () {
+        data = null;
+        $('list').className = 'empty';
+        $('list').textContent = '加载失败：无法连接电脑端服务（或密码未通过）';
+      });
+    }
+
+    function dayEvents(day) {
+      if (!data || !Array.isArray(data.events)) return [];
+      return data.events.filter(function (ev) { return occursOn(ev, day); })
+        .sort(function (a, b) { return toMin(a.start) - toMin(b.start); });
+    }
+
+    function render() {
+      var pick = $('datePick');
+      if (!pick.value) pick.value = fmtDate(new Date());
+      var day = parseDate(pick.value);
+      var list = $('list');
+      list.className = 'list';
+      list.innerHTML = '';
+
+      var evs = dayEvents(day);
+      if (!evs.length) {
+        list.className = 'empty';
+        list.textContent = (isToday(day) ? '今天' : '该日') + '暂无日程';
+        return;
+      }
+      var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+      evs.forEach(function (ev) {
+        var it = document.createElement('div');
+        it.className = 'it';
+        var s = toMin(ev.start), e = toMin(ev.end);
+        if (isToday(day) && s <= nowMin && e >= nowMin) it.style.borderColor = '#f85149';
+
+        var bar = document.createElement('div');
+        bar.className = 'bar';
+        bar.style.background = ev.color || '#4f8ef7';
+
+        var time = document.createElement('div');
+        time.className = 'time';
+        time.textContent = ev.start || '';
+        var sub = document.createElement('small');
+        sub.textContent = '至 ' + (ev.end || '');
+        sub.className = 'muted';
+        time.appendChild(sub);
+
+        var body = document.createElement('div');
+        body.style.minWidth = '0'; body.style.flex = '1';
+        var t = document.createElement('div');
+        t.className = 'title';
+        t.textContent = ev.title || '(未命名)';
+        body.appendChild(t);
+        if (ev.location) {
+          var m = document.createElement('div');
+          m.className = 'meta muted';
+          m.textContent = ev.location;
+          body.appendChild(m);
+        }
+
+        it.appendChild(bar); it.appendChild(time); it.appendChild(body);
+        it.onclick = function () { openDialog(ev); };
+        list.appendChild(it);
+      });
+    }
+    function isToday(d) { return fmtDate(d) === fmtDate(new Date()); }
+
+    // ---------- 对话框：查看并修改该条日程 ----------
+    function openDialog(ev) {
+      editEv = ev;
+      var mask = document.createElement('div');
+      mask.className = 'mask';
+      mask.id = 'dlgMask';
+      mask.innerHTML =
+        '<div class="dlg" role="dialog">' +
+        '  <h2>日程详情</h2>' +
+        '  <div class="rep muted" id="dRep"></div>' +
+        '  <div class="field"><label>名称</label><input id="dTitle" /></div>' +
+        '  <div class="row2">' +
+        '    <div class="field"><label>开始时间</label><input type="time" id="dStart" /></div>' +
+        '    <div class="field"><label>结束时间</label><input type="time" id="dEnd" /></div>' +
+        '  </div>' +
+        '  <div class="field"><label>地点</label><input id="dLoc" placeholder="可选" /></div>' +
+        '  <div class="field"><label>备注</label><input id="dNote" placeholder="可选" /></div>' +
+        '  <div class="field"><label>提前提醒（分钟，0 = 不提醒，默认 20）</label><input type="number" id="dLead" min="0" max="1440" step="1" /></div>' +
+        '  <div class="btns">' +
+        '    <button class="btn btnCancel" id="dCancel">取消</button>' +
+        '    <button class="btn btnSave" id="dSave">保存</button>' +
+        '  </div>' +
+        '  <div class="dlgMsg" id="dMsg"></div>' +
+        '</div>';
+      document.body.appendChild(mask);
+      $('dRep').textContent = describeRepeat(ev);
+      $('dTitle').value = ev.title || '';
+      $('dStart').value = ev.start || '';
+      $('dEnd').value = ev.end || '';
+      $('dLoc').value = ev.location || '';
+      $('dNote').value = ev.note || '';
+      $('dLead').value = (typeof ev.remindLead === 'number' && isFinite(ev.remindLead)) ? ev.remindLead : 20;
+      $('dMsg').textContent = '';
+
+      function close() { mask.parentNode && mask.parentNode.removeChild(mask); editEv = null; }
+      $('dCancel').onclick = close;
+      mask.addEventListener('click', function (e) { if (e.target === mask) close(); });
+      $('dSave').onclick = function () {
+        if (!editEv) return;
+        var title = String($('dTitle').value || '').trim();
+        var start = $('dStart').value, end = $('dEnd').value;
+        var msgEl = $('dMsg');
+        msgEl.className = 'dlgMsg';
+        if (!title) { msgEl.textContent = '名称不能为空'; msgEl.classList.add('err'); return; }
+        if (!start || !end) { msgEl.textContent = '请填写开始与结束时间'; msgEl.classList.add('err'); return; }
+        if (toMin(end) === toMin(start)) { msgEl.textContent = '结束时间不能等于开始时间'; msgEl.classList.add('err'); return; }
+
+        // 先改内存对象，写盘成功后关闭
+        editEv.title = title;
+        editEv.start = start;
+        editEv.end = end;
+        editEv.location = String($('dLoc').value || '').trim();
+        editEv.note = String($('dNote').value || '').trim();
+        var leadVal = parseInt($('dLead').value, 10);
+        if (!isNaN(leadVal) && leadVal >= 0 && leadVal <= 1440) editEv.remindLead = leadVal;
+        else delete editEv.remindLead; // 缺省回落到默认 20 分钟
+        msgEl.textContent = '正在保存…';
+        apiFetch(API_WRITE, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: JSON.stringify(data, null, 2) })
+        }).then(function (r) {
+          if (!r.ok) throw new Error('http ' + r.status);
+          return r.json();
+        }).then(function (j) {
+          if (!j.ok) throw new Error(j.error || 'write failed');
+          msgEl.textContent = '已保存，电脑端同步生效 ✓';
+          msgEl.classList.add('ok');
+          setTimeout(function () { close(); render(); }, 500);
+        }).catch(function (err) {
+          msgEl.textContent = '保存失败：' + (err.message || err);
+          msgEl.classList.add('err');
+        });
+      };
+    }
+
+    $('datePick').addEventListener('change', render);
+
+    // ---------- 提醒：事件开始前 N 分钟弹窗（N = 事件 remindLead，默认 20 分钟；0 = 不提醒） ----------
+    // 事件对象：schedule.json 的日程（weekly/once/custom），字段为本地日期 + start(HH:MM)。
+    // 计时基准：手机本地时钟——日程是无时区的本地墙上时间，与服务器时钟/时区无关，
+    // 时钟偏差与时区差异下触发点仍以「手机看到的事件开始时刻」为准。
+    var REMIND_DEFAULT = 20; // 分钟
+    var REMIND_OVERRIDE = null; // ?remindLead=xx 仅供验证测试（如 0.5 = 提前 30 秒）
+    try {
+      var qLead = new URLSearchParams(location.search).get('remindLead');
+      if (qLead !== null) { var f = parseFloat(qLead); if (isFinite(f)) REMIND_OVERRIDE = Math.min(REMIND_DEFAULT, Math.max(0.05, f)); }
+    } catch (e) {}
+    function leadOf(ev) {
+      if (REMIND_OVERRIDE !== null) return REMIND_OVERRIDE;
+      var v = parseFloat(ev.remindLead);
+      return (isFinite(v) && v >= 0) ? v : REMIND_DEFAULT;
+    }
+    var REMIND_STORE = 'tt-remind-state'; // { fired: {key: ts}, snooze: {key: ts} }
+    var remindOpen = null; // 当前弹窗对应的 key（弹窗期间不再弹新窗）
+    var SNOOZE_MS = 5 * 60 * 1000;
+
+    function remindState() {
+      try { return JSON.parse(localStorage.getItem(REMIND_STORE)) || { fired: {}, snooze: {} }; }
+      catch (e) { return { fired: {}, snooze: {} }; }
+    }
+    function remindSave(s) { try { localStorage.setItem(REMIND_STORE, JSON.stringify(s)); } catch (e) {} }
+    /** 已触发记录键：事件身份 + 日期 + 开始时间。改期（start 变）→ 键变 → 按新时间重新提醒；取消 → 事件消失 → 不再弹。 */
+    function evKey(ev, day) { return (ev.id || ev.title) + '|' + fmtDate(day) + '|' + ev.start; }
+
+    /** 到点应提醒的候选：今天/明天发生、落在 [start-lead, start) 窗口内、未弹过且不在小睡中的事件。 */
+    function reminderCandidates(now) {
+      if (!data || !Array.isArray(data.events)) return [];
+      var nowMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+      var st = remindState();
+      var out = [];
+      [now, new Date(now.getTime() + 864e5)].forEach(function (day) {
+        var isToday = fmtDate(day) === fmtDate(now);
+        data.events.forEach(function (ev) {
+          if (!occursOn(ev, day)) return;
+          var lead = leadOf(ev);
+          if (!(lead > 0)) return; // remindLead = 0 → 不提醒
+          var s = toMin(ev.start), e = toMin(ev.end);
+          if (e <= s) return; // 跨天事件：按开始日的开始时刻提醒，不做跨日推算
+          var fireAt = s - lead;
+          if (isToday) {
+            if (!(nowMin >= fireAt && nowMin < s)) return;
+          } else {
+            // 明天的事件仅当提醒点落在今天（fireAt < 0，即临近午夜的日程）才可能到点
+            if (fireAt >= 0) return;
+            if (!(nowMin >= fireAt + 1440 && nowMin < s)) return;
+          }
+          var key = evKey(ev, day);
+          if (st.fired[key]) return;
+          if (st.snooze[key] && Date.now() < st.snooze[key]) return;
+          out.push({ ev: ev, key: key, inMin: s - nowMin });
+        });
+      });
+      return out.sort(function (a, b) { return a.inMin - b.inMin; });
+    }
+
+    function showReminder(c) {
+      remindOpen = c.key;
+      var st = remindState();
+      st.fired[c.key] = Date.now();
+      var cut = Date.now() - 48 * 3600e3;
+      ['fired', 'snooze'].forEach(function (p) { for (var k in st[p]) if (st[p][k] < cut) delete st[p][k]; });
+      remindSave(st);
+
+      var ev = c.ev;
+      var title = '⏰ 日程提醒 · ' + (ev.title || '(未命名)');
+      var body = '约 ' + (c.inMin >= 1 ? Math.round(c.inMin) + ' 分钟后' : '马上') + '开始\n' + (ev.start || '') + ' – ' + (ev.end || '') + (ev.location ? ' · ' + ev.location : '');
+
+      // 系统级通知（已授权且 SW 就绪）：即使页面在后台/锁屏也能弹出；点击回到本页
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && swReg) {
+        try {
+          swReg.showNotification(title, { body: body, tag: c.key, renotify: true, icon: '/icon-192.png', badge: '/icon-192.png', vibrate: [200, 100, 200], data: { url: '/' } });
+          try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (e) {}
+          remindOpen = null; // 系统通知不等关闭，不阻塞后续提醒
+          return;
+        } catch (e) { /* SW 不可用则回落页面内弹窗 */ }
+      }
+
+      var mask = document.createElement('div');
+      mask.className = 'mask';
+      mask.innerHTML =
+        '<div class="dlg" role="alertdialog">' +
+        '  <h2>⏰ 日程提醒</h2>' +
+        '  <div class="rep muted">约 ' + (c.inMin >= 1 ? Math.round(c.inMin) + ' 分钟后' : '马上') + '开始</div>' +
+        '  <div style="font-size:16px;font-weight:600;margin:6px 0 2px" id="rTitle"></div>' +
+        '  <div class="muted" style="margin-bottom:6px" id="rMeta"></div>' +
+        '  <div class="btns">' +
+        '    <button class="btn btnCancel" id="rSnooze">稍后再提（5 分钟）</button>' +
+        '    <button class="btn btnSave" id="rOk">知道了</button>' +
+        '  </div>' +
+        '</div>';
+      mask.querySelector('#rTitle').textContent = ev.title || '(未命名日程)';
+      mask.querySelector('#rMeta').textContent = (ev.start || '') + ' – ' + (ev.end || '') + (ev.location ? ' · ' + ev.location : '');
+      document.body.appendChild(mask);
+      function close() { mask.parentNode && mask.parentNode.removeChild(mask); remindOpen = null; }
+      mask.querySelector('#rOk').onclick = close;
+      mask.addEventListener('click', function (e) { if (e.target === mask) close(); });
+      mask.querySelector('#rSnooze').onclick = function () {
+        var s2 = remindState();
+        delete s2.fired[c.key];
+        s2.snooze[c.key] = Date.now() + SNOOZE_MS;
+        remindSave(s2);
+        close();
+      };
+      try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (e) {}
+    }
+
+    // ---------- 系统级通知：Service Worker + Web Push 订阅（后台由电脑端服务定时推送） ----------
+    var swReg = null;
+
+    function urlB64ToUint8(b64) {
+      var pad = '='.repeat((4 - (b64.length % 4)) % 4);
+      var raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+      var arr = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+      return arr;
+    }
+
+    function notifyStateMsg(text) { $('notifyState').textContent = text || ''; }
+
+    async function enableNotifications() {
+      var btn = $('notifyBtn');
+      btn.disabled = true;
+      try {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+          notifyStateMsg('此浏览器不支持系统通知（iOS 需 16.4+ 并添加到主屏幕）');
+          return;
+        }
+        var perm = await Notification.requestPermission();
+        if (perm !== 'granted') { notifyStateMsg('通知权限未授予，仍用页面内弹窗'); return; }
+        swReg = await navigator.serviceWorker.register('/sw.js');
+        await navigator.serviceWorker.ready;
+        var key = await apiFetch('/api/push/key', { cache: 'no-store' }).then(function (r) { return r.json(); });
+        if (!key || !key.ok) { notifyStateMsg('服务端推送不可用：' + ((key && key.error) || '')); return; }
+        var existing = await swReg.pushManager.getSubscription();
+        var sub = existing || await swReg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlB64ToUint8(key.publicKey),
+        });
+        var r2 = await apiFetch('/api/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscription: sub.toJSON() }),
+        }).then(function (x) { return x.json(); });
+        if (r2 && r2.ok) {
+          notifyStateMsg('系统通知已开启 ✓（后台/锁屏也能提醒）');
+          btn.textContent = '🔔 系统通知已开启';
+        } else {
+          notifyStateMsg('订阅登记失败：' + ((r2 && r2.error) || ''));
+        }
+      } catch (e) {
+        notifyStateMsg('开启失败：' + (e.message || e));
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    $('notifyBtn').onclick = enableNotifications;
+
+    // 已授权过的设备静默恢复：注册 SW、同步订阅、更新按钮状态
+    (async function restoreNotifications() {
+      try {
+        if (typeof Notification === 'undefined' || Notification.permission !== 'granted' || !('serviceWorker' in navigator)) return;
+        swReg = await navigator.serviceWorker.register('/sw.js');
+        await navigator.serviceWorker.ready;
+        $('notifyBtn').textContent = '🔔 系统通知已开启';
+        var sub = await swReg.pushManager.getSubscription();
+        if (sub) {
+          await apiFetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subscription: sub.toJSON() }),
+          }).catch(function () {});
+          notifyStateMsg('系统通知已开启 ✓（后台/锁屏也能提醒）');
+        }
+      } catch (e) { /* 静默 */ }
+    })();
+
+    function checkReminders() {
+      if (remindOpen) return;
+      var cands = reminderCandidates(new Date());
+      if (cands.length) showReminder(cands[0]);
+    }
+    setInterval(checkReminders, 15000);   // 每 15 秒检查一次
+    setInterval(load, 5 * 60 * 1000);     // 每 5 分钟拉最新数据：电脑端取消/改期及时同步，避免误弹/漏弹
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) { load(); checkReminders(); } // 回到前台立即检查
+    });
+
+    // ---------- 对话电脑端 DSH（双端同会话：watch 流原样镜像电脑端与手机端的消息） ----------
+    function bubble(text, who) {
+      var log = $('chatLog');
+      var b = document.createElement('div');
+      b.className = 'bubble ' + (who === 'user' ? 'bUser' : 'bBot');
+      b.textContent = text;
+      log.appendChild(b);
+      b.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      return b;
+    }
+
+    // ---- 权威渲染：/api/chat/watch（优先 WebSocket——公网隧道会缓冲 GET SSE 流式响应体，
+    //      WS 帧不被缓冲且支持心跳保活（与 dsh-pocket 一致）；WS 不可用时回落 EventSource SSE） ----
+    var renderedSeqs = {};   // 已渲染帧 seq → true（快照/兜底轮询幂等去重）
+    var liveEl = null;       // 流式增量气泡（手机发送与电脑端生成共用）
+    var lastPartialText = '';
+    var pendingLocalUser = null; // 手机刚发出、尚未被 watch 确认的用户气泡 {text, el}
+
+    function ensureLive() {
+      if (liveEl && liveEl.parentNode) return liveEl;
+      liveEl = bubble('…', 'bot');
+      return liveEl;
+    }
+    function dropLive() {
+      if (liveEl && liveEl.parentNode) liveEl.parentNode.removeChild(liveEl);
+      liveEl = null;
+      lastPartialText = '';
+    }
+
+    // ---- 思考过程 / 工具调用（与 DSH 生成过程同步展示；完整过程含工具入参与输出） ----
+    var reasonEl = null; // 当前轮的思考过程折叠块（最终消息落地后收起保留）
+    function updateReasoning(text, fresh) {
+      if (!text) return;
+      if (fresh && reasonEl && reasonEl.parentNode) settleReasoning(); // 快照回放：每个步骤一个折叠块
+      if (!reasonEl || !reasonEl.parentNode) {
+        reasonEl = document.createElement('details');
+        reasonEl.className = 'bReason';
+        var sum = document.createElement('summary');
+        sum.textContent = '💭 思考过程';
+        var body = document.createElement('div');
+        body.className = 'rBody';
+        reasonEl.appendChild(sum);
+        reasonEl.appendChild(body);
+        $('chatLog').appendChild(reasonEl);
+        pinBottom();
+      }
+      reasonEl.querySelector('.rBody').textContent = text;
+    }
+    // ---- 工具卡片：🔧 名称 + 入参 + 输出（运行中 ⏳ / 成功 ✓ / 失败 ✕） ----
+    var toolEls = {}; // callId → 卡片元素
+    function toolCard(j) {
+      if (j.seq !== undefined) {
+        if (renderedSeqs[j.seq]) return;
+        renderedSeqs[j.seq] = true;
+      }
+      var id = j.id || ('seq-' + (j.seq ?? Math.random()));
+      if (toolEls[id] && toolEls[id].parentNode) return toolEls[id]; // 重复推送幂等
+      var d = document.createElement('details');
+      d.className = 'bToolCard';
+      var sum = document.createElement('summary');
+      var stat = document.createElement('span');
+      stat.className = 'tstat';
+      stat.textContent = '⏳ ' + (j.name || 'tool');
+      sum.appendChild(stat);
+      d.appendChild(sum);
+      if (j.args) {
+        var pre = document.createElement('pre');
+        pre.textContent = String(j.args);
+        d.appendChild(pre);
+      }
+      var res = document.createElement('pre');
+      res.style.display = 'none';
+      d.appendChild(res);
+      $('chatLog').appendChild(d);
+      toolEls[id] = d;
+      pinBottom();
+      return d;
+    }
+    function lastOpenToolCard() {
+      var cards = $('chatLog').querySelectorAll('.bToolCard');
+      for (var i = cards.length - 1; i >= 0; i--) { if (cards[i].getAttribute('data-done') !== '1') return cards[i]; }
+      return null;
+    }
+    function toolResultCard(j) {
+      if (j.seq !== undefined) {
+        if (renderedSeqs[j.seq]) return;
+        renderedSeqs[j.seq] = true;
+      }
+      var id = j.id || '';
+      var d = (id && toolEls[id] && toolEls[id].parentNode) ? toolEls[id] : (lastOpenToolCard() || toolCard({ id: id, name: 'tool' }));
+      d.setAttribute('data-done', '1');
+      var stat = d.querySelector('.tstat');
+      if (stat) stat.textContent = (j.error ? '✕ ' : '✓ ') + (stat.textContent.replace(/^[⏳✓✕]\s*/, '') || 'tool');
+      var pres = d.querySelectorAll('pre');
+      var res = pres[pres.length - 1];
+      if (res && j.text) {
+        res.textContent = String(j.text);
+        res.style.display = 'block';
+        if (j.error) res.classList.add('terr');
+      }
+    }
+    function settleReasoning() {
+      if (reasonEl && reasonEl.parentNode) {
+        try { reasonEl.open = false; } catch (e) {}
+      }
+      reasonEl = null; // 下一轮思考创建新的折叠块
+    }
+
+    function nearBottom(el) {
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    }
+    function appendServerMessage(msg) {
+      if (!msg || renderedSeqs[msg.seq]) return;
+      renderedSeqs[msg.seq] = true;
+      if (msg.role === 'user') {
+        // 手机本地刚发的同文本气泡 → 原位采纳（避免重复）
+        var log = $('chatLog');
+        var last = log.lastElementChild;
+        if (last && last.classList.contains('bUser') && last.getAttribute('data-local') === '1' && last.textContent === msg.text) {
+          last.removeAttribute('data-local');
+          pendingLocalUser = null;
+          return;
+        }
+        settleReasoning(); // 新一轮对话开始
+        bubble(msg.text, 'user');
+      } else {
+        dropLive(); // 最终消息覆盖流式气泡
+        settleReasoning(); // 思考过程收起保留在对话流中
+        bubble(msg.text, 'bot');
+        load(); // DSH 可能修改了 schedule.json
+      }
+    }
+
+    var watchWS = null;
+    var watchES = null;
+    var watchTransport = 'none';
+    var reasoningSeen = {}; // 快照思考块去重（内容前缀 → true）
+    function handleWatchFrame(j) {
+      if (!j) return;
+      if (j.t === 'message') appendServerMessage(j);
+      else if (j.t === 'question') renderQuestionCard(j);
+      else if (j.t === 'approval') renderApprovalCard(j);
+      else if (j.t === 'resolved') resolveCard(j);
+      else if (j.t === 'note') renderNoteCard(j);
+      else if (j.t === 'tool') toolCard(j);
+      else if (j.t === 'toolresult') toolResultCard(j);
+      else if (j.t === 'reasoning') {
+        if (j.fresh) {
+          // 快照回放：每个步骤的完整思考一个折叠块，按内容去重（兜底轮询会重复推送）
+          var rk = 'r:' + String(j.text || '').slice(0, 80);
+          if (!reasoningSeen[rk]) { reasoningSeen[rk] = true; updateReasoning(j.text, true); }
+        } else {
+          updateReasoning(j.text); // 实时增量（当前步骤累计文本）
+        }
+      }
+      else if (j.t === 'partial') {
+        var el = ensureLive();
+        if (j.text) { lastPartialText = j.text; el.textContent = j.text; }
+        else if (lastPartialText) el.textContent = lastPartialText + '\n…（继续处理中）';
+        else el.textContent = 'DSH 处理中…';
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
+    // 连接断了（WS 与 SSE 共用）：未登录 → 走全局登录闸门；已登录 → 退避重连
+    function watchDown() {
+      if (!authOk) {
+        ensureAuth().then(function (ok) {
+          if (ok) setTimeout(openWatch, 300);
+        });
+      } else {
+        setTimeout(openWatch, Math.min(3000, 500 + Math.floor(Math.random() * 500)));
+      }
+    }
+
+    function openWatch() {
+      try { if (watchES) { watchES.close(); watchES = null; } } catch (e) {}
+      try { if (watchWS) { watchWS.onclose = watchWS.onerror = null; watchWS.close(); watchWS = null; } } catch (e) {}
+      // 优先 WebSocket：公网隧道（cloudflared + Cloudflare 边缘）会缓冲 GET SSE 流式响应体，
+      // 手机长时间收不到任何帧；WebSocket 帧不被缓冲，且服务端注入协议层 Ping 心跳保活。
+      // Cookie 随同源 WS 握手自动携带。
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      var ws;
+      try { ws = new WebSocket(proto + '//' + location.host + '/api/chat/watch'); }
+      catch (e) { return openWatchSSE(); }
+      watchWS = ws;
+      watchTransport = 'ws';
+      var helloed = false;
+      ws.onmessage = function (e) {
+        var j = null;
+        try { j = JSON.parse(e.data); } catch (err) { return; }
+        if (j.t === 'hello') helloed = true;
+        handleWatchFrame(j);
+      };
+      ws.onclose = function () {
+        if (watchWS !== ws) return;
+        watchWS = null;
+        if (helloed) { watchDown(); return; } // 用过且断开 → 重连
+        // 握手都没成功（鉴权失败/中间层拒绝 WS）→ 回落 SSE（EventSource）
+        openWatchSSE();
+      };
+      ws.onerror = function () { try { ws.close(); } catch (e) {} };
+    }
+
+    // 兜底通道：EventSource SSE（局域网/WS 被中间层拦时使用；服务端 15 秒心跳注释行保活）
+    function openWatchSSE() {
+      try { if (watchES) watchES.close(); } catch (e) {}
+      watchTransport = 'sse';
+      var es = new EventSource('/api/chat/watch');
+      watchES = es;
+      es.onmessage = function (e) {
+        var j = null;
+        try { j = JSON.parse(e.data); } catch (err) { return; }
+        handleWatchFrame(j);
+      };
+      es.onerror = function () {
+        // 致命关闭：EventSource 遇非 200（如限流 503）不再自动重连 → 交给 watchDown 统一重开
+        if (es.readyState === EventSource.CLOSED) {
+          if (watchES !== es) return;
+          watchES = null;
+          watchDown();
+        }
+        // CONNECTING（网络闪断）由 EventSource 自动重连，不处理
+      };
+    }
+    // ---- 交互卡片：回答 DSH 的问题 / 批准工具调用（POST /api/respond 回传宿主） ----
+    var liveCards = {}; // rpcId → 卡片元素
+    function pinBottom() { var log = $('chatLog'); log.scrollTop = log.scrollHeight; }
+
+    function respond(payload, badge) {
+      badge.textContent = '提交中…';
+      apiFetch('/api/respond', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j && j.ok) badge.textContent = '已提交 ✓（等待 DSH 继续）';
+        else badge.textContent = '提交失败：' + ((j && j.error) || '未知错误');
+      }).catch(function (err) { badge.textContent = '提交失败：' + (err.message || err); });
+    }
+
+    function renderQuestionCard(j) {
+      if (liveCards[j.rpcId]) return; // 已渲染（重连快照重复推送）
+      var card = document.createElement('div');
+      card.className = 'qcard';
+      var badge = document.createElement('div');
+      badge.className = 'qbadge';
+      var selections = {}; // questionId → Set(label)
+      (j.questions || []).forEach(function (q) {
+        selections[q.id] = new Set();
+        var t = document.createElement('div');
+        t.className = 'qtitle';
+        t.textContent = (q.header ? q.header + ' · ' : '') + q.question;
+        card.appendChild(t);
+        if (q.detail) { var d = document.createElement('div'); d.className = 'qdetail'; d.textContent = q.detail; card.appendChild(d); }
+        var opts = document.createElement('div');
+        opts.className = 'qopts';
+        var custom = null;
+        (q.options || []).forEach(function (o) {
+          var label = o.label;
+          var b = document.createElement('button');
+          b.className = 'qopt';
+          b.textContent = label;
+          if (o.description) { var s = document.createElement('small'); s.textContent = o.description; b.appendChild(s); }
+          b.onclick = function () {
+            if (card.classList.contains('done')) return;
+            if (q.multiSelect) {
+              if (selections[q.id].has(label)) { selections[q.id].delete(label); b.classList.remove('on'); }
+              else { selections[q.id].add(label); b.classList.add('on'); }
+            } else {
+              selections[q.id].clear();
+              Array.prototype.forEach.call(opts.children, function (x) { x.classList.remove('on'); });
+              selections[q.id].add(label);
+              b.classList.add('on');
+            }
+          };
+          opts.appendChild(b);
+        });
+        card.appendChild(opts);
+        custom = document.createElement('input');
+        custom.className = 'qcustom';
+        custom.placeholder = '其他（可自由输入）';
+        card.appendChild(custom);
+        custom.setAttribute('data-qid', q.id);
+      });
+      var submit = document.createElement('button');
+      submit.className = 'qsubmit';
+      submit.textContent = '提交回答';
+      submit.onclick = function () {
+        var answer = [];
+        var ok = true;
+        (j.questions || []).forEach(function (q) {
+          var custEl = card.querySelector('.qcustom[data-qid="' + q.id + '"]');
+          var customText = String(custEl && custEl.value || '').trim();
+          var item = { id: q.id, selected: Array.from(selections[q.id]) };
+          if (customText) item.custom = customText;
+          if (!item.selected.length && !customText) ok = false;
+          answer.push(item);
+        });
+        if (!ok) { badge.textContent = '请先选择或输入答案'; return; }
+        submit.disabled = true;
+        respond({ rpcId: j.rpcId, kind: 'question', answer: answer }, badge);
+      };
+      card.appendChild(submit);
+      card.appendChild(badge);
+      $('chatLog').appendChild(card);
+      liveCards[j.rpcId] = card;
+      pinBottom();
+    }
+
+    function renderApprovalCard(j) {
+      if (liveCards[j.rpcId]) return;
+      var card = document.createElement('div');
+      card.className = 'qcard';
+      var t = document.createElement('div');
+      t.className = 'qtitle';
+      t.textContent = '⚠️ 需要批准：' + (j.toolName || '工具调用');
+      card.appendChild(t);
+      if (j.reason) { var d = document.createElement('div'); d.className = 'qdetail'; d.textContent = j.reason; card.appendChild(d); }
+      var badge = document.createElement('div');
+      badge.className = 'qbadge';
+      var row = document.createElement('div');
+      row.style.display = 'flex'; row.style.gap = '8px'; row.style.justifyContent = 'flex-end';
+      function act(outcome) {
+        Array.prototype.forEach.call(row.children, function (b) { b.disabled = true; });
+        respond({ rpcId: j.rpcId, kind: 'approval', approvalId: j.approvalId, outcome: outcome }, badge);
+      }
+      var no = document.createElement('button');
+      no.className = 'qsubmit'; no.style.background = 'transparent'; no.style.border = '1px solid #d1d5db'; no.style.color = 'inherit';
+      no.textContent = '拒绝'; no.onclick = function () { act('rejected'); };
+      var yes = document.createElement('button');
+      yes.className = 'qsubmit';
+      yes.textContent = '批准一次'; yes.onclick = function () { act('allowed-once'); };
+      row.appendChild(no); row.appendChild(yes);
+      card.appendChild(row);
+      card.appendChild(badge);
+      $('chatLog').appendChild(card);
+      liveCards[j.rpcId] = card;
+      pinBottom();
+    }
+
+    function resolveCard(j) {
+      var card = liveCards[j.rpcId];
+      if (!card) return;
+      card.classList.add('done');
+      card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+      var badge = card.querySelector('.qbadge');
+      if (badge) badge.textContent = '已处理（' + (j.outcome || 'resolved') + '）';
+      delete liveCards[j.rpcId];
+    }
+
+    // 提示卡（如：会话卡在早前电脑端的提问，可取消本轮解阻塞）
+    function renderNoteCard(j) {
+      var key = 'note-' + (j.text || '').slice(0, 24);
+      if (liveCards[key]) return;
+      var card = document.createElement('div');
+      card.className = 'qcard';
+      var t = document.createElement('div');
+      t.className = 'qdetail';
+      t.textContent = j.text || '';
+      card.appendChild(t);
+      if (j.cancellable) {
+        var btn = document.createElement('button');
+        btn.className = 'qsubmit';
+        btn.textContent = '取消本轮';
+        var badge = document.createElement('div');
+        badge.className = 'qbadge';
+        btn.onclick = function () {
+          btn.disabled = true;
+          badge.textContent = '取消中…';
+          apiFetch('/api/chat/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+            .then(function (r) { return r.json(); })
+            .then(function (r2) { badge.textContent = r2.ok ? '已取消，可重新发送消息' : '取消失败：' + (r2.error || ''); })
+            .catch(function (e) { badge.textContent = '取消失败：' + (e.message || e); });
+        };
+        card.appendChild(btn);
+        card.appendChild(badge);
+      }
+      $('chatLog').appendChild(card);
+      liveCards[key] = card;
+      pinBottom();
+    }
+
+    openWatch();
+
+    // ---------- 图片附件（拍照/相册 → 压缩 → base64） ----------
+    var attachments = []; // {mediaType, data(base64 无前缀), name, preview(dataURL)}
+    var MAX_ATTACH = 4;
+
+    function renderThumbs() {
+      var wrap = $('chatThumbs');
+      wrap.innerHTML = '';
+      wrap.style.display = attachments.length ? 'flex' : 'none';
+      attachments.forEach(function (a, i) {
+        var t = document.createElement('div');
+        t.className = 'thumb';
+        var img = document.createElement('img');
+        img.src = a.preview;
+        var rm = document.createElement('button');
+        rm.textContent = '×';
+        rm.onclick = function () { attachments.splice(i, 1); renderThumbs(); };
+        t.appendChild(img); t.appendChild(rm);
+        wrap.appendChild(t);
+      });
+    }
+
+    // 非动图统一压缩：最长边 1568px、JPEG 82%（动图 gif 直接原样，保留动画）
+    function compressImage(file) {
+      return new Promise(function (resolve, reject) {
+        var fr = new FileReader();
+        fr.onerror = function () { reject(new Error('读取失败')); };
+        fr.onload = function () {
+          var dataUrl = String(fr.result);
+          if (file.type === 'image/gif') {
+            resolve({ mediaType: 'image/gif', data: dataUrl.split(',')[1], name: file.name, preview: dataUrl });
+            return;
+          }
+          var img = new Image();
+          img.onerror = function () { reject(new Error('图片解析失败')); };
+          img.onload = function () {
+            var maxSide = 1568;
+            var scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+            var c = document.createElement('canvas');
+            c.width = Math.max(1, Math.round(img.width * scale));
+            c.height = Math.max(1, Math.round(img.height * scale));
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            var out = c.toDataURL('image/jpeg', 0.82);
+            resolve({ mediaType: 'image/jpeg', data: out.split(',')[1], name: (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg', preview: out });
+          };
+          img.src = dataUrl;
+        };
+        fr.readAsDataURL(file);
+      });
+    }
+
+    $('chatAttach').onclick = function () { $('chatFile').click(); };
+    $('chatFile').addEventListener('change', function () {
+      var files = Array.prototype.slice.call($('chatFile').files || []);
+      $('chatFile').value = '';
+      var room = MAX_ATTACH - attachments.length;
+      if (files.length > room) files = files.slice(0, room);
+      var chain = Promise.resolve();
+      files.forEach(function (f) {
+        if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) return;
+        chain = chain.then(function () {
+          return compressImage(f).then(function (a) { attachments.push(a); renderThumbs(); });
+        });
+      });
+      chain.catch(function (e) { bubble('图片处理失败：' + e.message, 'bot'); });
+    });
+
+    var chatBusyUI = false;
+    function sendChat() {
+      if (chatBusyUI) return;
+      var input = $('chatIn');
+      var text = String(input.value || '').trim();
+      if (!text && !attachments.length) return;
+      input.value = '';
+      var imgs = attachments.slice();
+      var ub = bubble(text || '（图片）', 'user');
+      ub.setAttribute('data-local', '1'); // 待 watch 流确认后原位采纳
+      pendingLocalUser = { text: text, el: ub };
+      attachments = [];
+      renderThumbs();
+      var live = ensureLive();
+      live.textContent = 'DSH 处理中…（可能需要十几秒）';
+      chatBusyUI = true;
+      $('chatSend').disabled = true;
+      $('chatAttach').disabled = true;
+
+      // 发送走流式端点（增量即时反馈）；最终消息与用户气泡由 watch 流统一落地
+      function handleFrame(line) {
+        if (line.indexOf('data: ') !== 0) return;
+        var j = null;
+        try { j = JSON.parse(line.slice(6)); } catch (e) { return; }
+        if (j.t === 'partial') {
+          if (j.text) { lastPartialText = j.text; live.textContent = j.text; }
+          else if (lastPartialText) live.textContent = lastPartialText + '\n…（继续处理中）';
+          live.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } else if (j.t === 'done') {
+          // watch 流会把最终 assistant/message 送来并移除实时气泡；此处仅兜底展示
+          if (live.parentNode) live.textContent = j.reply || live.textContent;
+          load();
+        } else if (j.t === 'error') {
+          dropLive();
+          bubble('发送失败：' + (j.error || 'unknown'), 'bot');
+        }
+      }
+
+      apiFetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+        body: JSON.stringify({ message: text, images: imgs })
+      }).then(function (r) {
+        if (!r.ok) throw new Error('http ' + r.status);
+        if (r.body && r.body.getReader) {
+          var reader = r.body.getReader();
+          var dec = new TextDecoder();
+          var buf = '';
+          return (function pump() {
+            return reader.read().then(function (chunk) {
+              if (chunk.done) return;
+              buf += dec.decode(chunk.value, { stream: true });
+              var idx;
+              while ((idx = buf.indexOf('\n\n')) >= 0) {
+                var frame = buf.slice(0, idx);
+                buf = buf.slice(idx + 2);
+                handleFrame(frame.trim());
+              }
+              return pump();
+            });
+          })();
+        }
+        return r.text().then(function (all) { all.split('\n\n').forEach(function (f) { handleFrame(f.trim()); }); });
+      }).catch(function (err) {
+        dropLive();
+        bubble('发送失败：' + (err.message || err), 'bot');
+      }).then(function () {
+        chatBusyUI = false;
+        $('chatSend').disabled = false;
+        $('chatAttach').disabled = false;
+      });
+    }
+    $('chatSend').onclick = sendChat;
+    $('chatIn').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
+
+    load();
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "name": "dsh-timetable-reminder",
+  "version": "0.1.1",
+  "description": "当日日程提醒：主窗口列出今日日程，开始前 30/10 分钟弹窗提醒，Ctrl+F5 全局显隐（参考 dsh-dafeiyu 插件式实现）。",
+  "author": "auto_timetable",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./protocol": "./src/protocol.js"
+  },
+  "files": [
+    "src/",
+    "runtime/helper.py",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "test:python": "py -3 -m unittest discover -s runtime/tests -t runtime -v"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "reminder",
+    "timetable"
+  ],
+  "license": "MIT"
+}

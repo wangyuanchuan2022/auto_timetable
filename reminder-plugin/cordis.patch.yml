@@ -1,0 +1,5 @@
+# dsh-timetable-reminder bundle patch（dsh.bundle manifest 要求的加载配置）
+# 注册宿主插件：读取/监听设置，拉起并看护 Python helper 子进程。
+- insert:
+    - id: dsh-timetable-reminder
+      name: dsh-timetable-reminder

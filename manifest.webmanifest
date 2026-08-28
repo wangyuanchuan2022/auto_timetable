@@ -1,0 +1,14 @@
+{
+  "name": "日程安排 · auto_timetable",
+  "short_name": "日程",
+  "description": "查看与编辑电脑端 auto_timetable 日程，事件开始前系统级提醒",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0e14",
+  "theme_color": "#4f6ef7",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

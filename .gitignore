@@ -1,0 +1,29 @@
+# 依赖目录 / 包管理器缓存
+node_modules/
+.pnpm-store/
+.venv/
+
+# Python 缓存与编译产物
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 构建产物 / 测试产物
+dist/
+build/
+.pkgtest/
+
+# 运行时状态与敏感文件（含安全密码、VAPID 私钥、推送订阅端点，切勿提交）
+.mobile-srv/
+.env
+.env.*
+*.pem
+*.key
+*_rsa
+secrets.*
+
+# 临时文件与日志
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
