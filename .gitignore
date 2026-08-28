@@ -27,3 +27,5 @@ secrets.*
 *.tmp
 .DS_Store
 Thumbs.db
+
+auto_timetable.zip

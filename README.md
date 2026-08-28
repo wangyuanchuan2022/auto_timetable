@@ -1,6 +1,8 @@
 # auto_timetable · 智能时间表
 
-一个 Windows 桌面 + 手机联动 + AI 日程助手三合一的时间表项目。数据统一存于根目录 `schedule.json`（每周重复 / 一次性 / 自定义间隔三类事件），三大模块共用同一份数据。
+**一个 DSH（DeepSeek Harness）插件组项目**：包含两个宿主插件——`dsh-timetable-reminder`（桌面提醒，`reminder-plugin/`）、`dsh-timetable-mobile`（手机连接，`mobile-plugin/`）——以及一个工作台挂载页面 `schedule.html`（周视图），并附可独立运行的桌面/手机入口。**依赖 [dsh-worktable](https://github.com/Aisland-SJL/dsh-worktable) 插件**：工作台窗口容器负责 `schedule.html` 的挂载渲染（`widget-result.json` 产物清单）、静态托管与文件读写接口（`/api/worktable/*`，页面编辑写回 `schedule.json` 即经此通道）。
+
+数据统一存于根目录 `schedule.json`（每周重复 / 一次性 / 自定义间隔三类事件），各模块共用同一份数据。
 
 ## 三大功能模块
 
@@ -12,7 +14,15 @@
 
 ## 安装与运行
 
-依赖：Node.js ≥ 22（手机连接服务）；Python ≥ 3.10（桌面提醒，标准库 tkinter 即可，插件版增强效果见下）。
+依赖：Node.js ≥ 22（手机连接服务）；Python ≥ 3.10（桌面提醒）；**DSH web + dsh-worktable 插件**（工作台窗口挂载与文件读写通道）。
+
+### 0. 前置：安装 DSH 与 dsh-worktable（本插件组的依赖底座）
+
+1. 安装并启动 DSH：`npm i -g @deepseek-ai/dsh`，然后运行 `dsh web`；
+2. 安装 **dsh-worktable**（工作台插件）：在 `~/.dsh/profiles/web/package.json` 的 `dependencies` 加入
+   `"dsh-worktable": "https://github.com/Aisland-SJL/dsh-worktable/releases/latest/download/dsh-worktable.tgz"`，
+   并在 `dsh.profile.bundles` 数组加入 `"dsh-worktable"`，在该目录执行 `pnpm install`，重启 DSH web；
+3. 将本仓库放置到任意目录（本文以 `D:/tools/auto_timetable` 为例）。在工作台打开本项目后，`widget-result.json` 会自动把 `schedule.html` 挂载进「智能时间表」项目的窗口并锁定保存。
 
 ### 1. 日程表页面（schedule.html）
 
@@ -20,17 +30,29 @@
 
 ### 2. 桌面端提醒
 
-```bash
-# 独立桌面应用（纯标准库，无第三方依赖）
-python reminder_app.py        # 或双击 start_reminder.bat（pythonw 后台常驻）
+**独立桌面应用**（纯标准库，无第三方依赖）：
 
-# DSH 插件版（Windows 11 原生 Toast / Mica 效果）
-cd reminder-plugin
-pnpm install                  # 宿主插件桥接依赖
-pip install maliang pywinstyles win32material   # Python helper 增强依赖
+```bash
+python reminder_app.py        # 或双击 start_reminder.bat（pythonw 后台常驻）
 ```
 
-插件版验收/测试：`DSH_TTR_TEST_TOAST=1 DSH_TTR_SHOW_ON_START=1 python runtime/helper.py`、无 GUI 协议模式 `python runtime/helper.py --headless`；单测 `pnpm test` 与 `pnpm run test:python`。
+**DSH 插件版 `dsh-timetable-reminder`**（Windows 11 原生 Toast / 亚克力效果）：
+
+```bash
+cd reminder-plugin
+pnpm install                  # 宿主插件桥接依赖（@deepseek-ai/schemastery）
+pip install maliang           # Python helper 的 UI 依赖（亚克力弹窗；pywinstyles/win32material 为可选增强，代码未直接依赖）
+```
+
+注册进 DSH profile（与 dsh-worktable 同一安装方式）：编辑 `~/.dsh/profiles/web/package.json`——
+
+- `dependencies` 加入 `"dsh-timetable-reminder": "link:D:/tools/auto_timetable/reminder-plugin"`（按实际路径）；
+- `dsh.profile.bundles` 加入 `"dsh-timetable-reminder"`；
+- 在该目录执行 `pnpm install`，重启 DSH web。
+
+> **bundle 契约（必读）**：profile bundle 必须在自身 `package.json` 声明 `"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }`，且包根目录存在 `cordis.patch.yml`（其 `insert` 的 `id`/`name` 必须与 `src/index.js` 导出的 `name` 一致）。任一缺失，DSH 启动即报错 `profile bundle "dsh-timetable-reminder" declares no dsh.bundle in its package.json`。本插件已内置该契约，改名时需同步三处。
+
+**验证**：重启 DSH web 后系统应出现 `py`/`python` 的 helper 进程；插件默认**无头**（不显示主窗口），按 **Ctrl+F5** 唤出/隐藏，到点自动弹 Toast。验收/测试：`DSH_TTR_TEST_TOAST=1 DSH_TTR_SHOW_ON_START=1 python runtime/helper.py`、无 GUI 协议模式 `python runtime/helper.py --headless`；单测 `pnpm test` 与 `pnpm run test:python`。
 
 ### 3. 手机连接
 
@@ -41,7 +63,7 @@ node mobile-server.mjs --public # 公网隧道（需先在面板设置安全密�
 node mobile-server.mjs --host 127.0.0.1  # 仅绑定本机
 ```
 
-在 `schedule.html` 工具栏点「手机访问」显示二维码，手机扫码即用。`mobile-plugin/` 为其 DSH 生命周期插件（`pnpm install` 后 link 进 profile bundles 随 DSH 自动启停）。
+在 `schedule.html` 工具栏点「手机访问」显示二维码，手机扫码即用。`mobile-plugin/` 为其 DSH 生命周期插件（注册方式同上：`dependencies` 用 `link:` 指向 `mobile-plugin/` + `dsh.profile.bundles` 加 `dsh-timetable-mobile` + `pnpm install`，需同样满足 bundle 契约），安装后随 DSH 自动启停。
 
 ### 4. 回归测试
 
