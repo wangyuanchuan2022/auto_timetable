@@ -1254,6 +1254,27 @@ async function createServer(port) {
         const { sid } = await ensureChatSession(settings);
         return sendJSON(res, 200, { ok: true, sessionId: sid, messages: await chatHistoryMessages(sid) });
       }
+      // ---- 手机端切换模型：列出 / 选择专属会话的模型（选择结果记为默认，纯文本消息沿用） ----
+      if (req.method === 'GET' && pathname === '/api/chat/models') {
+        if (!guardPin(req, res, settings)) return;
+        const { sid } = await ensureChatSession(settings);
+        const v = await dshRpc('session.models', { sessionId: sid });
+        return sendJSON(res, 200, { ok: true, current: v.current, groups: v.groups, failures: v.failures ?? [] });
+      }
+      if (req.method === 'POST' && pathname === '/api/chat/model') {
+        if (!guardPin(req, res, settings)) return;
+        const body = JSON.parse(await readBody(req, 16 * 1024));
+        const provider = String(body.provider ?? '');
+        const model = String(body.model ?? '');
+        if (!provider || !model) return sendJSON(res, 400, { ok: false, error: 'missing provider/model' });
+        const sel = { provider, model };
+        if (body.reasoningEffort) sel.reasoningEffort = String(body.reasoningEffort);
+        const { sid } = await ensureChatSession(settings);
+        await dshRpc('session.selectModel', { sessionId: sid, ...sel });
+        settings.chatDefaultModel = sel; // 记为默认：纯文本消息不再被切走；带图消息仍会临时切视觉模型
+        await saveSettings(settings);
+        return sendJSON(res, 200, { ok: true, current: sel });
+      }
       // ---- 手机端取消当前卡住的轮次（session.cancel） ----
       if (req.method === 'POST' && pathname === '/api/chat/cancel') {
         if (!guardPin(req, res, settings)) return;

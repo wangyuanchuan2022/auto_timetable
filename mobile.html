@@ -151,7 +151,10 @@
 
     <!-- 输入框：连接电脑端 DSH，通过对话让 DSH 编辑日程表 -->
     <div class="chat">
-      <h3>对话电脑端 DSH</h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <h3 style="margin:0 0 8px;font-size:14px">对话电脑端 DSH</h3>
+        <button id="modelBtn" style="padding:4px 10px;border-radius:999px;border:1px solid #d1d5db;background:transparent;color:inherit;font:inherit;font-size:11.5px;flex:none;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">模型：…</button>
+      </div>
       <div class="chatLog" id="chatLog"></div>
       <div class="thumbs" id="chatThumbs" style="display:none"></div>
       <div class="crow">
@@ -617,6 +620,79 @@
         }
       } catch (e) { /* 静默 */ }
     })();
+
+    // ---------- 模型切换：列出 / 选择专属会话的对话模型 ----------
+    function setModelLabel(cur) {
+      $('modelBtn').textContent = '模型：' + ((cur && cur.model) || '未知');
+    }
+
+    function openModelSheet() {
+      var mask = document.createElement('div');
+      mask.className = 'mask';
+      var dlg = document.createElement('div');
+      dlg.className = 'dlg';
+      var h = document.createElement('h2');
+      h.textContent = '切换对话模型';
+      var msgEl = document.createElement('div');
+      msgEl.className = 'qbadge';
+      msgEl.textContent = '加载中…';
+      var list = document.createElement('div');
+      list.style.maxHeight = '50vh';
+      list.style.overflowY = 'auto';
+      var closeBtn = document.createElement('button');
+      closeBtn.className = 'btn btnCancel';
+      closeBtn.textContent = '关闭';
+      closeBtn.style.marginTop = '10px';
+      closeBtn.style.width = '100%';
+      dlg.appendChild(h); dlg.appendChild(msgEl); dlg.appendChild(list); dlg.appendChild(closeBtn);
+      mask.appendChild(dlg);
+      document.body.appendChild(mask);
+      function close() { mask.parentNode && mask.parentNode.removeChild(mask); }
+      closeBtn.onclick = close;
+      mask.addEventListener('click', function (e) { if (e.target === mask) close(); });
+
+      apiFetch('/api/chat/models', { cache: 'no-store' }).then(function (r) {
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.json();
+      }).then(function (j) {
+        if (!j.ok) throw new Error(j.error || 'failed');
+        msgEl.textContent = '当前：' + (j.current ? j.current.provider + ' / ' + j.current.model : '未知');
+        list.innerHTML = '';
+        (j.groups || []).forEach(function (g) {
+          var gh = document.createElement('div');
+          gh.className = 'qdetail';
+          gh.style.margin = '8px 0 2px';
+          gh.textContent = g.id;
+          list.appendChild(gh);
+          (g.models || []).forEach(function (m) {
+            var b = document.createElement('button');
+            b.className = 'qopt';
+            b.style.width = '100%';
+            b.textContent = m.id + (j.current && j.current.model === m.id && j.current.provider === g.id ? '  ✓' : '');
+            b.onclick = function () {
+              b.disabled = true;
+              msgEl.textContent = '切换中…';
+              apiFetch('/api/chat/model', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: g.id, model: m.id }),
+              }).then(function (r2) { return r2.json(); }).then(function (j2) {
+                if (j2.ok) { setModelLabel(j2.current); msgEl.textContent = '已切换：' + j2.current.model; setTimeout(close, 600); }
+                else { msgEl.textContent = '切换失败：' + (j2.error || ''); b.disabled = false; }
+              }).catch(function (e2) { msgEl.textContent = '切换失败：' + (e2.message || e2); b.disabled = false; });
+            };
+            list.appendChild(b);
+          });
+        });
+      }).catch(function (e) {
+        msgEl.textContent = '加载失败：' + (e.message || e);
+      });
+    }
+    $('modelBtn').onclick = openModelSheet;
+
+    // 初始显示当前模型
+    apiFetch('/api/chat/models', { cache: 'no-store' }).then(function (r) { return r.json(); })
+      .then(function (j) { if (j.ok) setModelLabel(j.current); }).catch(function () {});
 
     function checkReminders() {
       if (remindOpen) return;

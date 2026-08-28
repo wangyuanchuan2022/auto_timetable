@@ -156,6 +156,8 @@ node mobile-server.mjs --host 127.0.0.1 # 仅绑定本机
 | `GET /api/chat/watch` | **双端同会话完整过程镜像**（参考 dsh-pocket：订阅宿主 `/api/events.mux` 实时事件流）：连接即下发完整过程快照（消息 / 思考 / 工具入参与输出，按 seq 幂等），此后实时推送该会话双端消息、流式增量、思考、工具调用与输出；**优先 WebSocket**（`Upgrade: websocket`，公网隧道首选；含心跳保活），自动回落 SSE（EventSource）；mux 断开时自动退化为 4 秒轮询补漏；手机与电脑端 GUI 共用同一条会话，任一端发言与全部中间步骤都会原样出现在手机对话框 |
 | `POST /api/respond` | **手机端答复 DSH 的提问/批准**：`{rpcId, kind:'question', answer:[{id,selected,custom?}]}` 或 `{rpcId, kind:'approval', approvalId, outcome:'allowed-once'\|'rejected'}`，转发至宿主 `POST /api/respond`；对应问题/批准经 watch 流推给手机渲染为可点选卡片 |
 | `POST /api/chat/cancel` | 取消当前卡住的轮次（`session.cancel`），解阻塞后可重新发送 |
+| `GET /api/chat/models` | 列出专属会话可用的模型（`session.models`：当前选择 + 按供应商分组 + 推理档位） |
+| `POST /api/chat/model` | 切换对话模型 `{provider, model, reasoningEffort?}`（`session.selectModel`；结果记为默认模型，纯文本消息沿用，带图消息仍会临时切视觉模型） |
 | `GET /api/chat/log` | 会话消息快照（调试/兜底用） |
 | `GET /api/status` | `{port, lanIp, lanUrl, pinSet, public:{running,url,phase}}`，供 PC 端面板生成二维码 |
 | `POST /api/admin/pin` | 设置 / 清除安全密码（body `{pin}`，空串清除；仅本机） |
