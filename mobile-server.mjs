@@ -3,13 +3,12 @@
  * mobile-server.mjs — 「本日日程」手机扫码访问 · 独立服务（与 dsh-pocket 完全分离）
  *
  * 职责：
- *   1. 托管手机端页面 mobile.html（http://<局域网IP>:<port>/）
+ *   1. 托管手机端页面 mobile.html（http://<本机IP>:<port>/）
  *   2. 提供 /api/schedule 读 / 写接口（直接读写同目录 schedule.json，不经 worktable、不经 dsh-pocket）
- *   3. 提供 /api/status 状态接口（局域网地址；--public 时附带自建 cloudflared 公网隧道地址）
+ *   3. 提供 /api/status 状态接口（本机访问地址）
  *
  * 用法：
- *   node mobile-server.mjs            # 局域网模式
- *   node mobile-server.mjs --public   # 额外开启公网隧道（cloudflared，缓存独立于 dsh-pocket）
+ *   node mobile-server.mjs                 # 监听 0.0.0.0（局域网 / 公网 IP 直连，凭安全密码防护）
  *   node mobile-server.mjs --port 3195
  *
  * 端口说明：默认 3190 起（dsh web 固定 3080；dsh-pocket 代理固定从 3081 起自动占用 3081-3090，
@@ -17,15 +16,14 @@
  */
 
 import http from 'node:http';
-import https from 'node:https';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual, scryptSync, randomBytes, randomInt } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
-import { spawn, execFile } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, open, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { withSetup, stripSetup } from './chat-setup.mjs';
 
 const require = createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -37,11 +35,17 @@ const SUBS_PATH = join(BIN_CACHE_DIR, 'push-subscriptions.json'); // Web Push �
 const FIRED_PATH = join(BIN_CACHE_DIR, 'remind-fired.json'); // 服务端已推送的提醒键（48h 清理）
 
 const args = process.argv.slice(2);
-const WANT_PUBLIC = args.includes('--public');
 const portArg = args.indexOf('--port');
 const BASE_PORT = portArg > -1 ? (parseInt(args[portArg + 1], 10) || 3190) : 3190;
 const hostArg = args.indexOf('--host');
 const BIND_HOST = hostArg > -1 ? String(args[hostArg + 1] || '0.0.0.0') : '0.0.0.0'; // 可 --host 127.0.0.1 仅本机
+
+// 隧道回连监听（main() 启动后赋值）：cloudflared ingress 指向 127.0.0.1:TUNNEL_PORT。
+// 该端口的请求带 __viaTunnel 标记：cf-connecting-ip 可信、Cookie 加 Secure；
+// 管理接口（/api/admin/*）也只在此端口开放——直连端口已全量收口（只回引导页），
+// 且经 CF 边缘的流量必带 cf-connecting-ip/cf-ray，被 trustedLocalRequest 拒于管理面之外。
+let TUNNEL_PORT = 0;
+let TUNNEL_URL = null; // named tunnel 固定公网地址（.mobile-srv/tunnel.json 的 url，启动时读一次）
 
 // ---------- 局域网 IPv4 选择（私网优先 / 物理网卡加分 / VPN 虚拟网卡减分） ----------
 const PRIVATE_IPV4_RE = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/;
@@ -70,9 +74,47 @@ function selectLanIPv4(interfaces) {
 async function loadSettings() {
   try { return JSON.parse(await readFile(SETTINGS_PATH, 'utf8')); } catch { return {}; }
 }
+/** 隧道公网信息（.mobile-srv/tunnel.json：{ "url": "https://tt.example.com" }；无则未配置）。 */
+async function loadTunnelInfo() {
+  try { return JSON.parse(await readFile(join(BIN_CACHE_DIR, 'tunnel.json'), 'utf8')); } catch { return null; }
+}
+
+// ---- Quick Tunnel 公网地址发现：cloudflared（独立常驻进程）把日志写入 tunnel.log，
+//      增量扫描其中的 https://*.trycloudflare.com，取最新一条作为当前公网地址。
+//      静态 tunnel.json（named tunnel 固定域名）优先；存在时不再扫日志。
+const TUNNEL_LOG_PATH = join(BIN_CACHE_DIR, 'tunnel.log');
+let tunnelLogOffset = 0;
+let tunnelStaticUrl = null;
+async function scanTunnelLog() {
+  if (tunnelStaticUrl) return; // named tunnel 固定地址，无需扫描
+  let fh;
+  try { fh = await open(TUNNEL_LOG_PATH, 'r'); } catch { return; /* 无日志文件 */ }
+  try {
+    const size = (await fh.stat()).size;
+    if (size < tunnelLogOffset) tunnelLogOffset = 0; // 日志被清理/轮转 → 从头扫
+    const len = size - tunnelLogOffset;
+    if (len > 0) {
+      const buf = Buffer.alloc(len);
+      await fh.read(buf, 0, len, tunnelLogOffset);
+      tunnelLogOffset = size;
+      const urls = [...String(buf).matchAll(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/gi)].map((m) => m[0]);
+      if (urls.length && urls[urls.length - 1] !== TUNNEL_URL) {
+        TUNNEL_URL = urls[urls.length - 1];
+        console.log(`mobile-server: 隧道公网地址 ${TUNNEL_URL}（quick tunnel，进程重启后会变化）`);
+      }
+    }
+  } catch { /* 读取失败下轮再试 */ } finally { try { await fh.close(); } catch { /* 忽略 */ } }
+}
+/** 原子写：同目录临时文件写完 rename 覆盖——写一半崩溃/并发读不会截断正文
+ *  （SCHEDULE_PATH / SETTINGS_PATH / SUBS_PATH / FIRED_PATH 全部走这里）。 */
+async function atomicWriteFile(path, data) {
+  const tmp = join(dirname(path), `.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
+  await writeFile(tmp, data, 'utf8');
+  await rename(tmp, path);
+}
 async function saveSettings(s) {
   await mkdir(BIN_CACHE_DIR, { recursive: true });
-  await writeFile(SETTINGS_PATH, JSON.stringify(s, null, 2), 'utf8');
+  await atomicWriteFile(SETTINGS_PATH, JSON.stringify(s, null, 2));
 }
 
 function parseCookies(header) {
@@ -85,8 +127,64 @@ function parseCookies(header) {
 }
 
 // ---------- 认证与防爆破（参照 dsh-pocket #13/#18/#33/#40 与 dsh api-request-trust 栅栏） ----------
-const COOKIE_NAME = 'tt_pin_v2'; // HttpOnly 登录 Cookie（SameSite=Strict），取代 URL 携带密码
-const PIN_COOKIE = (pin) => createHash('sha256').update('tt-cookie:' + String(pin)).digest('hex');
+const COOKIE_NAME = 'tt_pin_v2'; // HttpOnly 登录 Cookie（SameSite=Strict）：现承载服务端随机会话 token（可吊销/登出）
+const SESSION_MAX = 20;                 // 会话 token 上限（登录时惰性清理，砍最旧）
+const SESSION_TTL = 30 * 24 * 3600e3;   // 会话 30 天滚动过期（lastSeen 起算）
+
+/** 是否已设密码：新版存 pinHash（scrypt 加盐哈希），旧版遗留明文 pin 迁移期同样视为已设。 */
+function pinIsSet(settings) { return !!settings.pinHash || !!settings.pin; }
+
+/** scrypt 加盐哈希（N=16384）：存 {salt,hash}（hex），明文不落盘。 */
+function hashPin(pin) {
+  const salt = randomBytes(16).toString('hex');
+  const hash = scryptSync(String(pin), salt, 32, { N: 16384 }).toString('hex');
+  return { salt, hash };
+}
+
+/** 时序安全比对明文 pin 与存储形态（新 pinHash / 旧明文 pin 兼容迁移期）。所有比较统一走这里。 */
+function verifyPinSync(given, settings) {
+  const g = String(given ?? '');
+  if (!g) return false;
+  if (settings.pinHash?.salt && settings.pinHash?.hash) {
+    const calc = scryptSync(g, String(settings.pinHash.salt), 32, { N: 16384 });
+    return timingSafeEqual(calc, Buffer.from(String(settings.pinHash.hash), 'hex'));
+  }
+  if (settings.pin) {
+    const a = createHash('sha256').update(g).digest();
+    const b = createHash('sha256').update(String(settings.pin)).digest();
+    return timingSafeEqual(a, b);
+  }
+  return false;
+}
+
+/** 会话 token 惰性清理（登录时调用）：剔除过期、超上限砍最旧。 */
+function pruneSessions(settings) {
+  const now = Date.now();
+  let list = (Array.isArray(settings.sessions) ? settings.sessions : [])
+    .filter((s) => s && typeof s.token === 'string' && now - (s.lastSeen || s.createdAt || 0) < SESSION_TTL);
+  list.sort((a, b) => (a.lastSeen || a.createdAt || 0) - (b.lastSeen || b.createdAt || 0));
+  if (list.length > SESSION_MAX) list = list.slice(list.length - SESSION_MAX);
+  return list;
+}
+/** 签发新会话 token（调用方负责落盘）。 */
+function issueSession(settings) {
+  const list = pruneSessions(settings);
+  const token = randomBytes(32).toString('hex');
+  list.push({ token, createdAt: Date.now(), lastSeen: Date.now() });
+  settings.sessions = list;
+  return token;
+}
+/** 按 token 验会话：命中且未过期 → 更新内存 lastSeen 并返回 true。
+ *  lastSeen 只更新内存不逐请求落盘（30 天滚动窗口足够宽容，落盘时机=登录/登出/改密）。 */
+function touchSession(settings, token) {
+  if (!token) return false;
+  const s = (Array.isArray(settings.sessions) ? settings.sessions : [])
+    .find((x) => x && typeof x.token === 'string' && x.token === token);
+  if (!s) return false;
+  if (Date.now() - (s.lastSeen || s.createdAt || 0) >= SESSION_TTL) return false;
+  s.lastSeen = Date.now();
+  return true;
+}
 
 function isLoopbackHostname(hostname) {
   if (hostname === 'localhost' || hostname === '[::1]') return true;
@@ -94,23 +192,31 @@ function isLoopbackHostname(hostname) {
   return parts.length === 4 && parts[0] === '127' && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
 }
 
-// 客户端真实 IP（参照 dsh-pocket proxy.mjs clientIp()）：公网经 cloudflared 隧道时，
-// 所有连接在 socket 层都来自 cloudflared 的本机回环地址——若按 remoteAddress 计数，
-// 全部公网访客会挤进同一个「127.0.0.1」桶（SSE 每 IP 上限 / 登录限速全部共享，互相锁死）。
-// cloudflared 会把 Cloudflare 边缘见到的真实客户端 IP 写入 cf-connecting-ip（可信、不可伪造），
-// 优先取它；**不信任客户端自带的 x-forwarded-for**（可伪造）。
+// 客户端真实 IP：
+// · 直连端口（0.0.0.0:3190）：socket 对端地址即真实来源，**不采信任何转发头**
+//   （cf-connecting-ip / x-forwarded-for 等可被任意客户端伪造，曾可借此换「新 IP」绕过限流锁定）。
+// · 隧道端口（127.0.0.1:tunnelPort，仅 cloudflared 回连）：请求经 CF 边缘到达，
+//   cf-connecting-ip 由边缘强制覆写、不可经隧道伪造 → 按真实访客 IP 计数。
+//   本地进程直击隧道端口所带的伪造头会落入 'tunnel-unknown' 单独桶（无害）。
 function clientIpOf(req) {
-  const cf = String(req.headers['cf-connecting-ip'] ?? '').trim();
-  if (cf) return cf;
-  return String(req.socket.remoteAddress ?? '') || 'unknown';
+  if (req.__viaTunnel) {
+    const cf = String(req.headers['cf-connecting-ip'] ?? '').trim();
+    if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(cf) || /^[0-9a-f:]+$/i.test(cf)) return cf;
+    return 'tunnel-unknown';
+  }
+  let ip = String(req.socket.remoteAddress ?? '');
+  if (ip.startsWith('::ffff:')) ip = ip.slice(7); // IPv6 映射 IPv4 归一化，保证限流桶一致
+  return ip || 'unknown';
 }
 
-/** 每 IP 密码尝试限速：60 秒窗口 5 次，超限锁定 10 分钟（429 + 剩余秒数）。 */
-const RATE = { hits: new Map() };
+/** 每 IP 密码尝试限速：60 秒窗口 5 次；连续触限指数升级锁定（10 分钟起，翻倍封顶 24 小时）。
+ *  另设全局慢速闸（60 秒内全网合计 30 次失败 → 暂缓受理登录 60 秒）：端口直接暴露在
+ *  公网 IP 上，攻击者可轮换来源 IP 绕过单 IP 桶，全局闸拖慢任何分布式爆破（不影响正确密码）。 */
+const RATE = { hits: new Map(), globalFails: 0, globalResetAt: 0, globalHoldUntil: 0 };
 function rateState(ip) {
   const now = Date.now();
   let r = RATE.hits.get(ip);
-  if (!r || now > r.resetAt) { r = { count: 0, resetAt: now + 60_000, lockedUntil: 0 }; RATE.hits.set(ip, r); }
+  if (!r || now > r.resetAt) { r = { count: 0, resetAt: now + 60_000, lockedUntil: 0, strikes: 0 }; RATE.hits.set(ip, r); }
   return r;
 }
 function rateLocked(ip) {
@@ -118,10 +224,23 @@ function rateLocked(ip) {
   const now = Date.now();
   return r.lockedUntil > now ? Math.ceil((r.lockedUntil - now) / 1000) : 0;
 }
+function globalHoldSeconds() {
+  const now = Date.now();
+  if (RATE.globalResetAt <= now) { RATE.globalFails = 0; RATE.globalResetAt = now + 60_000; }
+  return RATE.globalHoldUntil > now ? Math.ceil((RATE.globalHoldUntil - now) / 1000) : 0;
+}
 function rateFail(ip) {
   const r = rateState(ip);
+  const now = Date.now();
   r.count += 1;
-  if (r.count >= 5) { r.lockedUntil = Date.now() + 600_000; r.count = 0; }
+  if (RATE.globalResetAt <= now) { RATE.globalFails = 0; RATE.globalResetAt = now + 60_000; }
+  RATE.globalFails += 1;
+  if (RATE.globalFails >= 30) RATE.globalHoldUntil = now + 60_000; // 全局慢速闸触发
+  if (r.count >= 5) {
+    r.strikes += 1; // 指数升级：10min → 20min → 40min … 封顶 24h
+    r.lockedUntil = now + Math.min(600_000 * 2 ** (r.strikes - 1), 24 * 3600_000);
+    r.count = 0;
+  }
 }
 function rateClear(ip) { RATE.hits.delete(ip); }
 setInterval(() => {
@@ -135,24 +254,26 @@ setInterval(() => {
  * 返回 {ok:true} | {ok:false,status,retryAfter,error}。
  */
 function checkPin(req, settings) {
-  if (!settings.pin) return { ok: true }; // 未设密码 → 放行
+  // 未设密码 → fail-closed：仅本机可信请求（面板设密码等管理面）放行，其余功能一律 503 引导先设密码。
+  if (!pinIsSet(settings)) {
+    if (trustedLocalRequest(req)) return { ok: true };
+    return { ok: false, status: 503, error: '请先在电脑端设置安全密码后再使用手机功能' };
+  }
+  // 先验凭据：已持有效 Cookie（会话 token）/密码的请求直接放行，不受闸门连坐。
+  // （原先闸门在凭据校验之前：公网攻击者刷失败登录可持续触发全局慢速闸，
+  //   把已登录的合法手机端一并拒掉——匿名 DoS。闸门只应拦「失败者」。）
+  const token = parseCookies(req.headers.cookie)[COOKIE_NAME] ?? '';
+  const header = String(req.headers['x-tt-pin'] ?? '');
+  let ok = false;
+  if (token) ok = touchSession(settings, token);
+  if (!ok && header) ok = verifyPinSync(header, settings); // 兼容头：明文 pin 与存储哈希时序安全比对
+  if (ok) { rateClear(clientIpOf(req)); return { ok: true }; }
+  // 凭据缺失/错误才走闸门：单 IP 锁定 → 全局慢速闸 → 计数
   const ip = clientIpOf(req);
   const retryAfter = rateLocked(ip);
   if (retryAfter > 0) return { ok: false, status: 429, retryAfter, error: `尝试次数过多，请 ${retryAfter} 秒后再试` };
-  const cookie = parseCookies(req.headers.cookie)[COOKIE_NAME] ?? '';
-  const header = String(req.headers['x-tt-pin'] ?? '');
-  const expect = PIN_COOKIE(settings.pin);
-  const expectPin = createHash('sha256').update(String(settings.pin)).digest('hex');
-  let ok = false;
-  if (cookie) {
-    const a = createHash('sha256').update(String(cookie)).digest();
-    const b = createHash('sha256').update(expect).digest();
-    ok = timingSafeEqual(a, b);
-  } else if (header) {
-    const a = createHash('sha256').update(String(header)).digest('hex');
-    ok = timingSafeEqual(Buffer.from(a), Buffer.from(expectPin));
-  }
-  if (ok) { rateClear(ip); return { ok: true }; }
+  const hold = globalHoldSeconds();
+  if (hold > 0) return { ok: false, status: 429, retryAfter: hold, error: `失败次数过多，服务暂缓受理登录，请 ${hold} 秒后再试` };
   rateFail(ip);
   const left = rateLocked(ip);
   if (left > 0) return { ok: false, status: 429, retryAfter: left, error: `密码错误次数过多，锁定 ${left} 秒` };
@@ -177,6 +298,15 @@ function guardPin(req, res, settings, extraHeaders = {}) {
  * 仅靠 remoteAddress=127.0.0.1 不足以防本机恶意网页与 DNS rebinding。
  */
 function trustedLocalRequest(req) {
+  // 直连端口已全量收口（只回隧道地址引导页），管理接口只可能到达回连端口。
+  // 经 cloudflared/CF 边缘转发的流量必然带边缘注入的 cf-connecting-ip / cf-ray
+  // （隧道客户端既不可伪造也不可剥离）→ 一律不视为本机管理请求；无这些头的
+  // 直连本机请求（面板 / curl）才继续走下面的头部纪律。
+  // 本地恶意页面伪造 cf 头只会把自己排除出管理面（失败方向是安全的）。
+  if (req.headers['cf-connecting-ip'] !== undefined || req.headers['cf-ray'] !== undefined) return false;
+  // 网络层硬闸：连接必须真的来自本机回环。公网直连下 Host/Origin 头可被 curl 任意伪造
+  // （curl 不发 sec-fetch-site / Origin，仅凭头部判定会放行「Host: 127.0.0.1」的远程请求）。
+  if (!isLoopback(req)) return false;
   const host = String(req.headers.host ?? '');
   let hu;
   try { hu = new URL(`http://${host}`); } catch { return false; }
@@ -208,126 +338,49 @@ function corsHeaders(req) {
   return {};
 }
 
-/** 旧版 loopback IP 判定（保留用于日志/兜底）。 */
+/** loopback 地址判定（IPv4 / IPv6 / IPv4-mapped IPv6）。 */
+function isLoopbackAddr(ra) {
+  const a = String(ra ?? '');
+  return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+}
+
+/** loopback 判定：/api/admin/* 与直连端口安全收口的网络层硬闸（见 trustedLocalRequest）。 */
 function isLoopback(req) {
-  const ra = String(req.socket.remoteAddress ?? '');
-  return ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1';
+  return isLoopbackAddr(req.socket.remoteAddress);
 }
 
-// ---------- cloudflared（可选公网隧道；缓存目录独立，不用 dsh-pocket 的缓存） ----------
-const TUNNEL = { process: null, url: null, detail: '', phase: 'idle' };
-
-function findInPath(bin) {
-  return new Promise((resolve) => {
-    const cmd = process.platform === 'win32' ? 'where' : 'which';
-    execFile(cmd, [bin], { timeout: 4000 }, (err, stdout) => {
-      resolve(!err && stdout ? stdout.split(/\r?\n/)[0].trim() : null);
-    });
-  });
-}
-
-// M-4：下载加固——仅允许 GitHub 域（含重定向目标）、100MB 上限、120 秒超时
-const GITHUB_HOST_RE = /(^|\.)github(usercontent)?\.com$/i;
-const DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024;
-
-function httpsDownload(url, dest, redirects = 0) {
-  return new Promise((resolve, reject) => {
-    if (redirects > 6) return reject(new Error('too many redirects'));
-    let u;
-    try { u = new URL(url); } catch { return reject(new Error('invalid url')); }
-    if (u.protocol !== 'https:' || !GITHUB_HOST_RE.test(u.hostname)) {
-      return reject(new Error(`download host not allowed: ${u.hostname}`));
-    }
-    const req = https.get(url, { headers: { 'User-Agent': 'auto-timetable-mobile-server' } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        const next = new URL(res.headers.location, url).href;
-        if (!GITHUB_HOST_RE.test(new URL(next).hostname)) { req.destroy(); return reject(new Error(`redirect host not allowed: ${new URL(next).hostname}`)); }
-        clearTimeout(timer);
-        return resolve(httpsDownload(next, dest, redirects + 1));
-      }
-      if (res.statusCode !== 200) { res.resume(); clearTimeout(timer); return reject(new Error('download failed: HTTP ' + res.statusCode)); }
-      const declared = parseInt(res.headers['content-length'] ?? '0', 10);
-      if (declared > DOWNLOAD_MAX_BYTES) { res.destroy(); clearTimeout(timer); return reject(new Error('download too large')); }
-      let size = 0;
-      const chunks = [];
-      res.on('data', (c) => {
-        size += c.length;
-        if (size > DOWNLOAD_MAX_BYTES) { res.destroy(); clearTimeout(timer); return reject(new Error('download too large')); }
-        chunks.push(c);
-      });
-      res.on('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks)); });
-      res.on('error', (e) => { clearTimeout(timer); reject(e); });
-    }).on('error', (e) => { clearTimeout(timer); reject(e); });
-    const timer = setTimeout(() => { req.destroy(); reject(new Error('download timeout')); }, 120_000);
-  });
-}
-
-async function ensureCloudflared() {
-  const exe = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
-  const fromPath = await findInPath(exe);
-  if (fromPath) return fromPath;
-  const cached = join(BIN_CACHE_DIR, exe);
-  try { await access(cached); return cached; } catch { /* 未缓存 */ }
-  const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
-  const plat = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux';
-  const url = `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-${plat}-${arch}${process.platform === 'win32' ? '.exe' : ''}`;
-  console.log(`mobile-server: 首次下载 cloudflared（约 20MB，缓存于 ${BIN_CACHE_DIR}）…`);
-  TUNNEL.phase = 'downloading';
-  const buf = await httpsDownload(url, cached);
-  await mkdir(BIN_CACHE_DIR, { recursive: true });
-  await writeFile(cached, buf);
-  return cached;
-}
-
-async function startTunnel(port) {
-  if (TUNNEL.process || TUNNEL.phase === 'starting' || TUNNEL.phase === 'registering' || TUNNEL.phase === 'downloading') return;
-  TUNNEL.phase = 'starting';
-  TUNNEL.detail = '启动隧道进程…';
-  const bin = await ensureCloudflared();
-  const child = spawn(bin, ['tunnel', '--url', `http://127.0.0.1:${port}`, '--no-autoupdate'], {
-    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
-  });
-  TUNNEL.process = child;
-  TUNNEL.phase = 'registering';
-  TUNNEL.detail = '连接 Cloudflare 边缘（通常 5-30 秒）…';
-  const onLog = (chunk) => {
-    const m = String(chunk).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
-    if (m && !TUNNEL.url) {
-      TUNNEL.url = m[0];
-      TUNNEL.phase = 'ready';
-      TUNNEL.detail = '隧道就绪';
-      console.log(`mobile-server: 公网隧道就绪 ${TUNNEL.url}`);
-    }
-  };
-  child.stdout.on('data', onLog);
-  child.stderr.on('data', onLog);
-  child.on('exit', (code) => {
-    TUNNEL.process = null;
-    TUNNEL.url = null;
-    TUNNEL.phase = 'error';
-    TUNNEL.detail = `隧道进程退出（code=${code}）`;
-  });
-}
-
-function stopTunnel() {
-  if (TUNNEL.process) {
-    try { TUNNEL.process.kill(); } catch { /* 忽略 */ }
-    TUNNEL.process = null;
-  }
-  TUNNEL.url = null;
-  TUNNEL.phase = 'idle';
-  TUNNEL.detail = '';
+/**
+ * 直连端口引导页（安全收口）：明文直连端口不提供任何功能，仅提示改走 HTTPS 隧道。
+ * 隧道地址只对本机来源（PC 面板/本机浏览器换设备登录）展示；公网扫描者只见通用引导
+ * 文案，不奉送入口 URL。
+ */
+function directNoticePage(req) {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const url = isLoopback(req) ? TUNNEL_URL : null;
+  const body = url
+    ? `<p>为提升安全性，本端口已停用明文直连服务。</p>
+       <p class="url"><a href="${esc(url)}" rel="noopener">${esc(url)}</a></p>
+       <p class="tip">3 秒后自动跳转到安全地址（全程 HTTPS；首次访问需输入访问密码）。</p>`
+    : isLoopback(req)
+      ? '<p>安全隧道暂不可用：请确认电脑端 cloudflared 正在运行，然后刷新本页。</p>'
+      : `<p>为提升安全性，本端口已停用明文直连服务。</p>
+         <p class="tip">请通过 HTTPS 安全地址访问；如需获取访问地址，请联系管理员。</p>`;
+  return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">${url ? `
+<meta http-equiv="refresh" content="3;url=${esc(url)}">` : ''}
+<title>智能时间表 · 请使用安全地址访问</title>
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f1216;color:#d6dce5;font:15px/1.7 system-ui,sans-serif}
+main{max-width:560px;padding:32px 28px;background:#171b22;border:1px solid #2a3140;border-radius:14px;text-align:center}
+h1{font-size:17px;margin:0 0 14px}.url a{color:#8ea2ff;font-size:16px;word-break:break-all;text-decoration:none}
+.tip{color:#8b93a3;font-size:13px}</style></head>
+<body><main><h1>🔒 请使用安全地址访问</h1>${body}</main></body></html>`;
 }
 
 // ---------- DSH 对话桥：以 loopback 身份调用本机 dsh web 的共享 /api RPC ----------
 // 手机端输入框 → 本服务 POST /api/chat → session.prompt 送入电脑端 DSH 专属会话
 // （cwd = 本目录，即可直接编辑 schedule.json）→ 轮询 session.history 取助手回复。
+// 系统设定注入/剥离见 chat-setup.mjs（宿主 RPC 无 instructions 通道，只能内联首条消息）。
 const DSH_API = process.env.DSH_API_URL || `http://127.0.0.1:${process.env.DSH_PORT || 3080}`;
-const CHAT_INSTRUCTION =
-  '你是「智能时间表」的日程管理助手（由手机端对话入口调用）。工作目录就是日程表所在目录，' +
-  '你的任务：按用户指示查看与编辑 schedule.json（事件分 weekly/once/custom 三类，字段说明见 README.md），' +
-  '可直接读写文件。回复要求：用简短中文（手机屏幕阅读），只说明你做了什么修改或直接回答日程问题，不要输出多余内容。';
 let rpcCounter = 0;
 let chatBusy = false;
 
@@ -349,6 +402,15 @@ async function dshRpc(method, payload) {
   return r.value;
 }
 
+/** 新建会话后应用用户选择的默认模型（会话重建不丢手机端/本地的模型选择）。 */
+async function applyDefaultModel(sid, settings) {
+  const sel = settings.chatDefaultModel;
+  if (!sel?.provider || !sel?.model) return;
+  try {
+    await dshRpc('session.selectModel', { sessionId: sid, provider: sel.provider, model: sel.model });
+  } catch { /* 所选模型不可用时沿用宿主默认 */ }
+}
+
 /** 取（或创建）专属 DSH 会话；无效时自动重建。存于本机 settings.json。 */
 async function ensureChatSession(settings) {
   const sid = settings.chatSessionId;
@@ -362,6 +424,10 @@ async function ensureChatSession(settings) {
   settings.chatSessionId = created.sessionId;
   settings.chatInited = false;
   await saveSettings(settings);
+  await applyDefaultModel(created.sessionId, settings); // 修复：重建不丢已选模型
+  // 修复：仍绑在旧会话上的手机 watch 连接立即改绑并收到 reset 帧，
+  // 否则它们过滤旧 sessionId 一帧收不到（手机端表现为"无流式响应，刷新才可见"）
+  notifySessionReset(sid, created.sessionId);
   return { sid: created.sessionId, inited: false };
 }
 
@@ -424,8 +490,9 @@ function findStreamError(evs, marker) {
 /** 会话被图片事件「污染」后纯文本模型无法重放历史的典型错误（1210）。 */
 const POISON_RE = /content\.type|code.{0,4}1210|image input/i;
 
-/** 丢弃并重建专属会话（历史含图片块且模型不支持时自愈）。 */
+/** 丢弃并重建专属会话（历史含图片块且模型不支持时自愈 / 手机端新建对话）。 */
 async function resetChatSession(settings) {
+  const oldSid = settings.chatSessionId;
   settings.chatSessionId = undefined;
   settings.chatInited = false;
   await saveSettings(settings);
@@ -433,6 +500,8 @@ async function resetChatSession(settings) {
   settings.chatSessionId = created.sessionId;
   settings.chatInited = false;
   await saveSettings(settings);
+  await applyDefaultModel(created.sessionId, settings); // 修复：重建不丢已选模型
+  notifySessionReset(oldSid, created.sessionId); // 旧会话的手机连接改绑 + 旧会话未答交互请求作废
   return created.sessionId;
 }
 
@@ -463,7 +532,8 @@ async function chatOnce(message, images, onPartial) {
   const { sid, inited } = await ensureChatSession(settings);
   await ensureModelShape(sid, settings, images.length > 0);
   const marker = await lastSeqOf(sid);
-  const plainText = inited ? String(message) : `${CHAT_INSTRUCTION}\n\n（以上为系统设定。下面是用户消息：）\n${message}`;
+  // 新会话首条消息内联注入系统设定（见 chat-setup.mjs）；镜像回手机时剥离设定前缀
+  const plainText = inited ? String(message) : withSetup(message);
   const content = buildChatContent(plainText, images);
   try {
     await dshRpc('session.prompt', { sessionId: sid, mode: 'queue', content });
@@ -547,7 +617,7 @@ async function chatHistoryMessages(sid) {
     if (!Array.isArray(content)) continue;
     const text = content.filter((b) => b?.type === 'text').map((b) => b?.text ?? '').join('').trim();
     if (!text) continue;
-    out.push({ role: e.type === 'user/message' ? 'user' : 'assistant', text, seq: e.seq ?? 0 });
+    out.push({ role: e.type === 'user/message' ? 'user' : 'assistant', text: e.type === 'user/message' ? stripSetup(text) : text, seq: e.seq ?? 0 });
   }
   return out;
 }
@@ -575,7 +645,7 @@ async function chatHistoryFrames(sid) {
       flushReasoning(d.turn, d.step);
       const content = d.message?.content ?? d.content;
       const text = Array.isArray(content) ? content.filter((b) => b?.type === 'text').map((b) => b?.text ?? '').join('').trim() : '';
-      if (text) frames.push({ t: 'message', role: e.type === 'user/message' ? 'user' : 'assistant', text, seq: e.seq ?? 0 });
+      if (text) frames.push({ t: 'message', role: e.type === 'user/message' ? 'user' : 'assistant', text: e.type === 'user/message' ? stripSetup(text) : text, seq: e.seq ?? 0 });
     } else if (e.type === 'tool/call') {
       flushReasoning(d.turn, d.step);
       lastToolId = String(d.callId ?? '');
@@ -605,20 +675,36 @@ async function ensureVapid(settings) {
   return settings.vapid;
 }
 
+/** Push endpoint 安全校验：必须 https，且不得指向 loopback / 私网 / 链路本地段
+ *  （防认证后 SSRF：服务端会在提醒触发时向 endpoint 发 POST）。 */
+function safePushEndpoint(endpoint) {
+  let u;
+  try { u = new URL(String(endpoint ?? '')); } catch { return false; }
+  if (u.protocol !== 'https:') return false;
+  const h = u.hostname.toLowerCase();
+  if (!h || h === 'localhost' || h === '[::1]' || isLoopbackHostname(h)) return false;
+  if (/^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.|0\.|127\.)/.test(h)) return false;
+  if (h.startsWith('[') && (/^\[(?:fe80|fc|fd)/i.test(h) || h === '[::]')) return false; // IPv6 链路本地 / ULA / 全零
+  return true;
+}
+
 async function loadSubs() {
   try { return JSON.parse(await readFile(SUBS_PATH, 'utf8')); } catch { return []; }
 }
 async function saveSubs(list) {
   await mkdir(BIN_CACHE_DIR, { recursive: true });
-  await writeFile(SUBS_PATH, JSON.stringify(list, null, 2), 'utf8');
+  await atomicWriteFile(SUBS_PATH, JSON.stringify(list, null, 2));
 }
 
+/** 向全部订阅推送。返回是否「已处理」：全部送达成功、或死订阅(404/410)清理完毕都算已处理；
+ *  任一网络级异常 → false（调用方不标 fired，20 秒后自动重试；通知 tag 去重防重复弹窗）。 */
 async function pushToAll(payloadObj) {
   const subs = await loadSubs();
-  if (!subs.length || !webpush) return;
+  if (!subs.length || !webpush) return false;
   const vapid = await ensureVapid(await loadSettings());
-  if (!vapid) return;
+  if (!vapid) return false;
   const dead = [];
+  let allHandled = true;
   await Promise.all(subs.map(async (s) => {
     try {
       await webpush.sendNotification(s, JSON.stringify(payloadObj), {
@@ -626,10 +712,12 @@ async function pushToAll(payloadObj) {
         TTL: 3600,
       });
     } catch (e) {
-      if (e?.statusCode === 404 || e?.statusCode === 410) dead.push(s); // 订阅失效 → 移除
+      if (e?.statusCode === 404 || e?.statusCode === 410) dead.push(s); // 订阅失效 → 移除（视为已处理）
+      else allHandled = false; // 网络异常等 → 未处理，允许重试
     }
   }));
   if (dead.length) await saveSubs(subs.filter((s) => !dead.includes(s)));
+  return allHandled;
 }
 
 // —— 服务端事件判定（与手机端同规则：weekly / once / custom；本地墙上时间） ——
@@ -640,6 +728,7 @@ function srvFmtMin(m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':'
 function srvParseDate(s) { const p = String(s).split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
 function srvOccursOn(ev, day) {
   const ds = srvFmtDate(day);
+  if (ev.deadline && ds > ev.deadline) return false; // 截止日期：到该日（含）为止生效
   const type = ev.type || 'once';
   if (type === 'weekly') return srvIsoWeekday(day) === (ev.weekday || 1);
   if (type === 'once') return ev.date === ds;
@@ -671,7 +760,7 @@ function srvOccursOn(ev, day) {
 async function loadFired() { try { return JSON.parse(await readFile(FIRED_PATH, 'utf8')); } catch { return {}; } }
 async function saveFired(m) {
   await mkdir(BIN_CACHE_DIR, { recursive: true });
-  await writeFile(FIRED_PATH, JSON.stringify(m), 'utf8');
+  await atomicWriteFile(FIRED_PATH, JSON.stringify(m));
 }
 
 let scheduleCache = { at: 0, data: null };
@@ -683,6 +772,36 @@ async function loadSchedule() {
     scheduleCache = { at: Date.now(), mtime: stat.mtimeMs, data };
     return data;
   } catch { return scheduleCache.data ?? { events: [] }; }
+}
+
+/** 清除判定：过期即失效（渲染/提醒立即停止），但数据保留——截止日期早于「今天往前推 3 个月」才清除。 */
+function isPurgeableEvent(ev, cutoff) {
+  let dl = (typeof ev.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ev.deadline)) ? ev.deadline : null;
+  if (!dl && ev.type === 'once') dl = (typeof ev.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ev.date)) ? ev.date : null;
+  if (!dl && ev.type === 'custom' && ev.repeat && typeof ev.repeat.until === 'string') dl = ev.repeat.until;
+  return !!dl && dl < cutoff;
+}
+
+/** 到期自动清理（保留 3 个月）：把「截止日期已过满 3 个月」的日程从 schedule.json 删除（2 空格缩进风格）。 */
+async function purgeExpired() {
+  try {
+    const now = new Date();
+    // 日历月往前推 3 个月（Date 自动处理月份下溢；月末溢出如 05-31→02-31 会顺延到 03-03，宁晚勿早）
+    const cutoffDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
+    const cutoff = srvFmtDate(cutoffDate);
+    const data = JSON.parse(await readFile(SCHEDULE_PATH, 'utf8'));
+    const before = (data.events ?? []).length;
+    const kept = (data.events ?? []).filter(ev => !isPurgeableEvent(ev, cutoff));
+    if (kept.length === before) return 0;
+    data.events = kept;
+    await atomicWriteFile(SCHEDULE_PATH, JSON.stringify(data, null, 2) + '\n');
+    scheduleCache = { at: 0, data: null }; // 失效缓存，下次读取拿新数据
+    console.log(`[purge] 已清除 ${before - kept.length} 条过期满 3 个月（截止早于 ${cutoff}）的日程（剩余 ${kept.length} 条）`);
+    return before - kept.length;
+  } catch (e) {
+    console.error('[purge] 到期清理失败:', e?.message || e);
+    return 0;
+  }
 }
 
 /** 每 20 秒扫描：事件落在 [start-remindLead, start) 且未推送过 → Web Push 系统通知。 */
@@ -700,7 +819,8 @@ function startReminderScheduler() {
       for (const ev of (data.events ?? [])) {
         for (const day of [now, new Date(now.getTime() + 864e5)]) {
           if (!srvOccursOn(ev, day)) continue;
-          const lead = Number.isFinite(parseFloat(ev.remindLead)) && parseFloat(ev.remindLead) > 0 ? parseFloat(ev.remindLead) : 20;
+          const leadRaw = parseFloat(ev.remindLead);
+          const lead = Number.isFinite(leadRaw) && leadRaw >= 0 ? leadRaw : 20; // 显式 0 = 不提醒；非法/缺失才默认 20
           if (!(lead > 0)) continue;
           const s = srvToMin(ev.start), e = srvToMin(ev.end);
           if (e <= s) continue;
@@ -712,14 +832,15 @@ function startReminderScheduler() {
           if (!inWindow) continue;
           const key = `${ev.id || ev.title}|${srvFmtDate(day)}|${ev.start}`;
           if (fired[key]) continue;
-          fired[key] = Date.now();
-          changed = true;
-          await pushToAll({
+          // 先发后标：推送成功（或死订阅已清理）才写 fired；失败不标记，20 秒后自动重试
+          // （重试会对已成功的设备重发同 tag 通知，系统按 tag 去重不会弹两次）
+          const handled = await pushToAll({
             title: '⏰ 日程提醒',
             body: `${ev.title || '(未命名)'} ${ev.start}–${ev.end}${ev.location ? ' · ' + ev.location : ''}（约 ${Math.max(1, Math.round(s - nowMin))} 分钟后开始）`,
             tag: key,
             url: '/',
           });
+          if (handled) { fired[key] = Date.now(); changed = true; }
         }
       }
       // 清理 48h 前的记录
@@ -734,6 +855,20 @@ function startReminderScheduler() {
 // 宿主在 ws://127.0.0.1:<dshPort>/api/events.mux（loopback 受信）单向推送全部会话的
 // session/event 帧；这里按手机端关注的会话过滤，原样镜像到 /api/chat/watch 的 SSE。
 const MUX = { ws: null, listeners: new Set(), backoff: 0, pending: new Map() }; // pending: rpcId → 交互请求（手机未连时暂存）
+
+/** 会话重建后：旧会话未答的提问/批准作废；仍绑旧会话的手机 watch 连接
+ *  ①立即改绑到新会话（重连完成前实时帧也不中断），②下发 reset 帧让手机端
+ *  清空按会话去重的 seq 表并重连拿新会话快照（seq 是每会话独立编号，撞号会误丢帧）。 */
+function notifySessionReset(oldSid, newSid) {
+  if (!oldSid || oldSid === newSid) return;
+  for (const [rid, p] of MUX.pending) if (p.sessionId === oldSid) MUX.pending.delete(rid);
+  for (const l of MUX.listeners) {
+    if (l.sid !== oldSid) continue;
+    try { l.send({ t: 'reset', sid: newSid }); } catch (e) { /* 该连接已死则等其自行重连 */ }
+    l.sid = newSid;
+    l.acc = ''; l.accR = '';
+  }
+}
 
 function muxDispatch(payload, rpcId) {
   if (!payload) return;
@@ -771,7 +906,8 @@ function muxDispatch(payload, rpcId) {
       const text = Array.isArray(content) ? content.filter((b) => b?.type === 'text').map((b) => b?.text ?? '').join('').trim() : '';
       l.acc = '';
       l.accR = '';
-      if (text) l.send({ t: 'message', role: ev.type === 'user/message' ? 'user' : 'assistant', text, seq: ev.seq ?? 0 });
+      // 用户消息剥离内联系统设定前缀（手机不显示设定原文，且回显文本与本地气泡一致以便原位采纳）
+      if (text) l.send({ t: 'message', role: ev.type === 'user/message' ? 'user' : 'assistant', text: ev.type === 'user/message' ? stripSetup(text) : text, seq: ev.seq ?? 0 });
       return;
     }
     // 完整过程：工具调用（含入参）与工具输出（含错误态）随生成实时镜像到手机端
@@ -850,11 +986,12 @@ function muxEnsure() {
 }
 
 // ---------- watch 流共用逻辑（SSE 与 WebSocket 共享）：快照 + 暂存补发 + 卡答提示 + 兜底轮询 ----------
-/** SSE 心跳：每 15 秒下发 `: ping` 注释行——防 NAT/代理空闲超时静默掐线（dsh-pocket PR#41 同思路的 SSE 版）。 */
+/** SSE 心跳：每 15 秒下发 `: ping` 注释行（防 NAT/代理空闲超时静默掐线，dsh-pocket PR#41 同思路）
+ *  + 一条 data 帧 ping（手机端用它检测静默僵尸连接：长时间收不到任何帧即主动重连）。 */
 function sseKeepalive(req, res, isClosed, onDead) {
   const timer = setInterval(() => {
     if (isClosed()) { clearInterval(timer); return; }
-    try { res.write(': ping\n\n'); } catch (e) { clearInterval(timer); onDead?.(); }
+    try { res.write(': ping\ndata: {"t":"ping"}\n\n'); } catch (e) { clearInterval(timer); onDead?.(); }
   }, 15_000);
   timer.unref?.();
   return timer;
@@ -865,11 +1002,13 @@ function sseKeepalive(req, res, isClosed, onDead) {
  * @returns 停止函数（清理兜底轮询与 listener 注册由调用方负责 listener 注册外的部分）
  */
 async function watchSessionStream(sid, send, listener) {
+  // 先 hello（携带会话 id）：手机端据 sid 变化清空按会话去重的 seq 表，再收快照——
+  // 顺序不能反，否则会话重建后的快照帧先到、被旧表的撞号 seq 误丢
+  send({ t: 'hello', sid });
   // 连接即快照：完整过程（消息 / 思考 / 工具入参与输出）按 seq 下发（手机端按 seq 去重，幂等）
   try {
     for (const f of await chatHistoryFrames(sid)) send(f);
   } catch (e) { send({ t: 'error', error: String(e?.message ?? e) }); }
-  send({ t: 'hello' });
   MUX.listeners.add(listener);
   // 手机晚连接：补发暂存的交互请求（问题/批准）
   for (const [rid, p] of MUX.pending) {
@@ -907,10 +1046,10 @@ async function watchSessionStream(sid, send, listener) {
   return () => clearInterval(timer);
 }
 
-// ---------- 最小 WebSocket 服务端（无第三方依赖；dsh-pocket 用 WS 过 Cloudflare 隧道推送实时流） ----------
-// 为什么公网必须走 WS：实测 quick tunnel 会缓冲无 Content-Length 的 GET SSE 流式响应体
-// （首帧延迟可达 100 秒以上，手机端长时间收不到任何数据）；WebSocket 帧不被缓冲，
-// 且支持协议层心跳（Ping/Pong）保活——与 dsh-pocket 透传 /api/events.mux 的做法一致。
+// ---------- 最小 WebSocket 服务端（无第三方依赖） ----------
+// watch 优先走 WebSocket：移动网络中间设备可能缓冲 / 掐断无 Content-Length 的 GET SSE
+// 流式响应；WebSocket 帧不被缓冲，且支持协议层心跳（Ping/Pong）保活——
+// 蜂窝网络下长时间保持实时镜像更可靠（公网 IP 直连场景同样适用）。
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
 /** 服务端→客户端帧（不掩码）。 */
@@ -945,14 +1084,21 @@ function wsDecodeFrame(buf) {
  * 处理 /api/chat/watch 的 WebSocket upgrade（与 SSE 端点同协议帧、同鉴权）。
  * @param server http.Server（监听 /api/chat/watch 的 upgrade 事件）
  */
-function attachWatchWebSocket(server, sseAdmitLike) {
+function attachWatchWebSocket(server, sseAdmitLike, viaTunnel = false) {
   server.on('upgrade', async (req, socket, head) => {
+    if (viaTunnel) req.__viaTunnel = true;
     let pathname = '/';
     try { pathname = new URL(req.url ?? '/', 'http://x').pathname; } catch { /* 忽略 */ }
     if (pathname !== '/api/chat/watch') { try { socket.destroy(); } catch (e) {} return; }
+    // 直连端口已全量收口（只回指路牌）：WebSocket 升级一律拒绝，watch 只走回连端口
+    if (!viaTunnel) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\ncontent-type: application/json\r\n\r\n{"ok":false,"error":"direct port serves the tunnel address only"}');
+      try { socket.destroy(); } catch (e) {}
+      return;
+    }
     const key = String(req.headers['sec-websocket-key'] ?? '');
     if (!key) { try { socket.destroy(); } catch (e) {} return; }
-    // 鉴权与限流（Cookie 随同源 WS 握手自动携带；cf-connecting-ip 已纳入真实 IP 计数）
+    // 鉴权与限流（Cookie 随同源 WS 握手自动携带；按 socket 对端 IP 计数）
     const settings = await loadSettings();
     const pinOk = checkPin(req, settings);
     if (!pinOk.ok) {
@@ -989,13 +1135,16 @@ function attachWatchWebSocket(server, sseAdmitLike) {
       }
     });
     // 心跳（dsh-pocket PR#41 同思路）：25 秒协议层 Ping，浏览器网络栈自动回 Pong；
-    // 连续 2 个周期零入站字节（链路被静默丢弃）→ 主动断开让浏览器触发重连
+    // 连续 2 个周期零入站字节（链路被静默丢弃）→ 主动断开让浏览器触发重连。
+    // 同时下发应用层 ping 帧：手机端 JS 可感知（协议 Pong 对 JS 不可见），
+    // 长时间收不到任何帧即判定连接已死并主动重连（运营商 NAT 静默丢映射场景）。
     let alive = true;
     const hb = setInterval(() => {
       if (closed) return;
       if (!alive) { cleanup(); return; }
       alive = false;
       sendRaw(wsEncodeFrame(0x9, Buffer.alloc(0)));
+      send({ t: 'ping' });
     }, 25_000);
     hb.unref?.();
     socket.on('data', () => { alive = true; });
@@ -1014,7 +1163,7 @@ function attachWatchWebSocket(server, sseAdmitLike) {
 }
 
 function send(res, status, body, headers = {}) {
-  res.writeHead(status, { 'cache-control': 'no-store', ...headers });
+  res.writeHead(status, { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...headers });
   res.end(body);
 }
 function sendJSON(res, status, obj, extraHeaders = {}) {
@@ -1030,9 +1179,9 @@ function readBody(req, limit = 5 * 1024 * 1024) {
   });
 }
 
-async function createServer(port) {
+async function createServer(port, viaTunnel = false) {
   // 流式连接上限（SSE + WebSocket 统一计数）：单 IP ≤4、全局 ≤16（防慢速连接耗尽资源）。
-  // IP 取 cf-connecting-ip 优先（公网隧道下每个真实访客独立配额；cloudflared 本机回环不再共享一个桶）。
+  // IP 按 socket 对端地址计（不采信可伪造的转发头）。
   const sseCount = { perIp: new Map(), total: 0 };
   function admitStream(req, onReject) {
     const ip = clientIpOf(req);
@@ -1066,14 +1215,28 @@ async function createServer(port) {
     return true;
   }
   const server = http.createServer(async (req, res) => {
+    if (viaTunnel) req.__viaTunnel = true; // 隧道端口标记：cf 头可信域 / 管理禁用 / Secure Cookie
     const pathname = new URL(req.url ?? '/', 'http://x').pathname;
     try {
+      // ---- 安全收口（全量）：直连端口不承载任何功能，对一切来源（含本机）只回"指路牌" ----
+      // GET/HEAD 任意路径 → 显示当前 Cloudflare 隧道地址的引导页；其余方法 → 403 + 地址。
+      // 功能入口只剩两条：HTTPS 隧道（外网）与回连端口 127.0.0.1:3191（本机，管理接口也在此）。
+      if (!viaTunnel) {
+        if (req.method === 'GET' || req.method === 'HEAD') {
+          return send(res, 200, req.method === 'HEAD' ? '' : directNoticePage(req), {
+            'content-type': 'text/html; charset=utf-8',
+            'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'",
+          });
+        }
+        // 403 响应里的隧道地址同样只给本机来源；公网来源不泄露入口 URL
+        return sendJSON(res, 403, { ok: false, error: 'direct port serves the tunnel address only', ...(isLoopback(req) ? { url: TUNNEL_URL || null } : {}) });
+      }
       if (req.method === 'GET' && (pathname === '/' || pathname === '/mobile.html' || pathname === '/index.html')) {
         const html = await readFile(MOBILE_HTML_PATH);
         return send(res, 200, html, {
           'content-type': 'text/html; charset=utf-8',
-          // CSP：限制连接源为本站（防外泄），图片允许 data:/blob:（压缩预览）
-          'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'",
+          // CSP：限制连接源为本站（防外泄），图片允许 data:/blob:（压缩预览）；拒绝被嵌入 iframe
+          'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'",
         });
       }
       if (req.method === 'OPTIONS' && pathname.startsWith('/api/')) {
@@ -1094,32 +1257,26 @@ async function createServer(port) {
         if (req.method === 'POST' && pathname === '/api/admin/pin') {
           const body = JSON.parse(await readBody(req, 64 * 1024));
           const pin = String(body.pin ?? '');
-          if (pin && !/^\S{6,64}$/.test(pin)) return sendJSON(res, 400, { ok: false, error: '密码需为 6-64 位、不含空格' });
-          // 已设密码时，设置/清除都必须先验证旧密码（防本机恶意页面篡改）
-          if (settings.pin) {
-            const oldOk = String(body.oldPin ?? '') === settings.pin;
+          if (pin && !/^\S{8,64}$/.test(pin)) return sendJSON(res, 400, { ok: false, error: '密码需为 8-64 位、不含空格（公网直连暴露，建议长密码）' });
+          // 已设密码时，设置/清除都必须先验证旧密码（防本机恶意页面篡改）；
+          // 比对统一走 verifyPinSync（时序安全，兼容新旧存储形态）
+          if (pinIsSet(settings)) {
+            const oldOk = verifyPinSync(String(body.oldPin ?? ''), settings);
             if (!oldOk) return sendJSON(res, 403, { ok: false, error: '需要提供当前密码才能修改或清除' });
           }
-          if (pin) settings.pin = pin; else delete settings.pin; // 空串 = 清除密码
+          if (pin) {
+            settings.pinHash = hashPin(pin); // 新密码：scrypt 加盐哈希落盘，明文不存本机
+            delete settings.pin; // 旧明文形态（若有）随之退役
+          } else { delete settings.pinHash; delete settings.pin; } // 空串 = 清除密码
+          settings.sessions = []; // 改/清密码 → 吊销全部已签发会话 token
           await saveSettings(settings);
-          console.log(`mobile-server: 安全密码已${pin ? '设置' : '清除'}（仅存本机）`);
+          console.log(`mobile-server: 安全密码已${pin ? '设置' : '清除'}（scrypt 哈希落盘，明文不存本机）`);
           return sendJSON(res, 200, { ok: true, pinSet: !!pin }, corsHeaders(req));
         }
-        if (req.method === 'POST' && pathname === '/api/admin/tunnel') {
-          const body = JSON.parse(await readBody(req, 64 * 1024));
-          if (body.on === true) {
-            if (!settings.pin) return sendJSON(res, 400, { ok: false, error: '请先设置安全密码再开启公网隧道' });
-            await startTunnel(port);
-          } else {
-            stopTunnel();
-          }
-          return sendJSON(res, 200, { ok: true }, corsHeaders(req));
-        }
         if (req.method === 'POST' && pathname === '/api/admin/shutdown') {
-          // DSH 插件回收时调用（loopback 栅栏保护）：先关隧道再优雅退出
+          // DSH 插件回收时调用（loopback 网络层栅栏保护）：优雅退出
           sendJSON(res, 200, { ok: true }, corsHeaders(req));
           setTimeout(() => {
-            try { stopTunnel(); } catch (e) { /* 忽略 */ }
             console.log('mobile-server: 收到 shutdown 请求，退出');
             process.exit(0);
           }, 100);
@@ -1128,26 +1285,46 @@ async function createServer(port) {
         return sendJSON(res, 404, { ok: false, error: 'not found' });
       }
 
-      // ---- 登录：验证密码后种 HttpOnly Cookie（取代 ?pin= 与 localStorage 存密码） ----
+      // ---- 登录：验证密码后签发服务端随机会话 token（HttpOnly Cookie 承载） ----
       const settings = await loadSettings();
       if (req.method === 'POST' && pathname === '/api/login') {
         const body = JSON.parse(await readBody(req, 16 * 1024));
         const given = String(body.pin ?? '');
-        if (!settings.pin) return sendJSON(res, 400, { ok: false, error: '未设置安全密码' });
+        if (!pinIsSet(settings)) return sendJSON(res, 403, { ok: false, error: 'pin required' }); // 统一 403，不泄露「是否设置过密码」
         const ip = clientIpOf(req);
         const lock = rateLocked(ip);
         if (lock > 0) return sendJSON(res, 429, { ok: false, error: `尝试次数过多，请 ${lock} 秒后再试`, retryAfter: lock }, { 'retry-after': String(lock) });
-        const a = createHash('sha256').update(given).digest('hex');
-        const b = createHash('sha256').update(String(settings.pin)).digest('hex');
-        if (!given || !timingSafeEqual(Buffer.from(a), Buffer.from(b))) {
+        if (!given || !verifyPinSync(given, settings)) {
+          // 全局慢速闸对登录失败同样生效（此前只在 checkPin 生效，/api/login 自身漏防分布式爆破）。
+          // 正确密码在上面已验证通过并 return，不会走到这里，合法登录不受闸门影响。
+          const hold = globalHoldSeconds();
+          if (hold > 0) return sendJSON(res, 429, { ok: false, error: `失败次数过多，服务暂缓受理登录，请 ${hold} 秒后再试`, retryAfter: hold }, { 'retry-after': String(hold) });
           rateFail(ip);
           const left = rateLocked(ip);
           return sendJSON(res, left > 0 ? 429 : 401, { ok: false, error: left > 0 ? `密码错误次数过多，锁定 ${left} 秒` : '密码错误' , ...(left > 0 ? { retryAfter: left } : {}) }, left > 0 ? { 'retry-after': String(left) } : {});
         }
         rateClear(ip);
+        // 兼容迁移：旧明文 pin 首次登录成功 → 就地改写为 scrypt 哈希，明文从此不再落盘
+        if (settings.pin) { settings.pinHash = hashPin(settings.pin); delete settings.pin; }
+        const token = issueSession(settings); // 随机会话 token：可登出/吊销（改密时全体吊销）
+        await saveSettings(settings);
         return send(res, 200, JSON.stringify({ ok: true }), {
           'content-type': 'application/json; charset=utf-8',
-          'set-cookie': `${COOKIE_NAME}=${PIN_COOKIE(settings.pin)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 3600}`,
+          'set-cookie': `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 3600}${viaTunnel ? '; Secure' : ''}`,
+        });
+      }
+
+      // ---- 登出：吊销当前会话 token 并清 Cookie（Cookie 名沿用，前端无感） ----
+      if (req.method === 'POST' && pathname === '/api/logout') {
+        if (!guardPin(req, res, settings)) return;
+        const token = parseCookies(req.headers.cookie)[COOKIE_NAME] ?? '';
+        if (token) {
+          settings.sessions = (Array.isArray(settings.sessions) ? settings.sessions : []).filter((s) => !s || s.token !== token);
+          await saveSettings(settings);
+        }
+        return send(res, 200, JSON.stringify({ ok: true }), {
+          'content-type': 'application/json; charset=utf-8',
+          'set-cookie': `${COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${viaTunnel ? '; Secure' : ''}`,
         });
       }
 
@@ -1163,6 +1340,9 @@ async function createServer(port) {
         const body = JSON.parse(await readBody(req, 64 * 1024));
         if (!body?.subscription?.endpoint || !body.subscription?.keys?.p256dh) {
           return sendJSON(res, 400, { ok: false, error: 'invalid subscription' });
+        }
+        if (!safePushEndpoint(body.subscription.endpoint)) {
+          return sendJSON(res, 400, { ok: false, error: 'push endpoint 必须为公网 https 地址（不接受 http / 内网 / loopback）' });
         }
         const subs = await loadSubs();
         if (!subs.some((s) => s.endpoint === body.subscription.endpoint)) {
@@ -1282,6 +1462,16 @@ async function createServer(port) {
         await dshRpc('session.cancel', { sessionId: sid });
         return sendJSON(res, 200, { ok: true });
       }
+      // ---- 手机端新建对话：尽力中止旧轮次，另建全新会话（旧会话历史仍保留在宿主/电脑端） ----
+      if (req.method === 'POST' && pathname === '/api/chat/reset') {
+        if (!guardPin(req, res, settings)) return;
+        const old = settings.chatSessionId;
+        if (chatBusy && old) {
+          try { await dshRpc('session.cancel', { sessionId: old }); } catch (e) { /* 尽力中止，失败不阻塞新建 */ }
+        }
+        const sid = await resetChatSession(settings); // 复用既有重建逻辑：session.create + 恢复默认模型 + 旧连接改绑通知
+        return sendJSON(res, 200, { ok: true, sessionId: sid });
+      }
       // ---- 手机端答复 DSH 的问题 / 批准：回传宿主 POST /api/respond（client-response 信封） ----
       if (req.method === 'POST' && pathname === '/api/respond') {
         if (!guardPin(req, res, settings)) return;
@@ -1348,7 +1538,7 @@ async function createServer(port) {
         if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.events)) {
           return sendJSON(res, 400, { ok: false, error: 'invalid schedule' });
         }
-        await writeFile(SCHEDULE_PATH, body.content, 'utf8');
+        await atomicWriteFile(SCHEDULE_PATH, body.content);
         return sendJSON(res, 200, { ok: true });
       }
       if (req.method === 'GET' && pathname === '/api/status') {
@@ -1363,8 +1553,9 @@ async function createServer(port) {
           ...(local ? {
             lanIp,
             lanUrl: lanIp ? `http://${lanIp}:${port}` : null,
-            pinSet: !!settings.pin,
-            public: { running: !!TUNNEL.url, url: TUNNEL.url, phase: TUNNEL.phase, detail: TUNNEL.detail },
+            pinSet: pinIsSet(settings),
+            // 隧道信息仅本机视角可见：url 为 named tunnel 固定地址（面板据此生成手机二维码）
+            ...(TUNNEL_PORT ? { tunnel: { port: TUNNEL_PORT, url: TUNNEL_URL } } : {}),
           } : {}),
         }, cors);
       }
@@ -1374,14 +1565,30 @@ async function createServer(port) {
     }
   });
   // WebSocket 通道（/api/chat/watch upgrade）：公网隧道下的首选实时通道（GET SSE 会被 CF 边缘缓冲）
-  attachWatchWebSocket(server, wsAdmit);
+  attachWatchWebSocket(server, wsAdmit, viaTunnel);
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, BIND_HOST, () => resolve(server));
+    server.listen(port, viaTunnel ? '127.0.0.1' : BIND_HOST, () => resolve(server));
   });
 }
 
 async function main() {
+  // 首启强制随机密码（fail-closed）：从未设置过密码（新部署 / 旧部署无 pin）→ 自动生成
+  // 12 位随机字母数字密码，scrypt 哈希落盘；明文只在启动日志展示一次（可经 PC 面板「手机访问」修改）。
+  {
+    const s = await loadSettings();
+    if (!pinIsSet(s)) {
+      const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'; // 去掉易混淆字符（0O1lI）的字母数字表
+      let pin = '';
+      for (let i = 0; i < 12; i++) pin += abc[randomInt(0, abc.length)];
+      s.pinHash = hashPin(pin);
+      s.sessions = [];
+      await saveSettings(s);
+      console.log('mobile-server: 未检测到安全密码，已自动生成随机密码（手机端登录用；可经 PC 面板修改）：');
+      console.log(`  安全密码：${pin}`);
+    }
+  }
+
   let server = null, port = 0;
   for (let p = BASE_PORT; p < BASE_PORT + 10; p++) {
     try { server = await createServer(p); port = p; break; }
@@ -1389,34 +1596,43 @@ async function main() {
   }
   if (!server) { console.error(`mobile-server: 端口 ${BASE_PORT}-${BASE_PORT + 9} 均被占用，启动失败`); process.exit(1); }
 
-  // 实际监听端口落盘：DSH 插件据此发送 HTTP shutdown 回收本服务
-  try { await mkdir(BIN_CACHE_DIR, { recursive: true }); await writeFile(join(BIN_CACHE_DIR, 'port'), String(port), 'utf8'); } catch (e) { /* 忽略 */ }
+  // 隧道回连监听：独立 loopback 端口（默认 3191 起），cloudflared 的 ingress 指向这里。
+  // 与直连端口分开，保证「转发头可信域」隔离：cf-connecting-ip 只在此端口被采信。
+  for (let p = BASE_PORT + 1; p < BASE_PORT + 10; p++) {
+    if (p === port) continue;
+    try {
+      const ts = await createServer(p, true);
+      TUNNEL_PORT = p;
+      ts.once('close', () => { TUNNEL_PORT = 0; });
+      break;
+    } catch (err) { if (err?.code !== 'EADDRINUSE') throw err; }
+  }
+  TUNNEL_URL = (await loadTunnelInfo())?.url ?? null;
+  tunnelStaticUrl = TUNNEL_URL; // named tunnel 固定地址优先；quick tunnel 走日志扫描
+  await scanTunnelLog();
+  setInterval(scanTunnelLog, 10_000).unref?.();
+
+  // 功能端口落盘（回连端口——管理/关停接口所在处）：DSH 插件据此发送 HTTP shutdown 回收本服务。
+  // 直连端口只回引导页（无 API），写功能端口而非直连端口。
+  try {
+    await mkdir(BIN_CACHE_DIR, { recursive: true });
+    const funcPort = TUNNEL_PORT || port;
+    await writeFile(join(BIN_CACHE_DIR, 'port'), String(funcPort), 'utf8');
+    if (TUNNEL_PORT) await writeFile(join(BIN_CACHE_DIR, 'tunnel-port'), String(TUNNEL_PORT), 'utf8');
+  } catch (e) { /* 忽略 */ }
 
   const lanIp = selectLanIPv4(networkInterfaces());
   console.log('mobile-server: 独立手机访问服务已启动（与 dsh-pocket 无关）');
   startReminderScheduler(); // 系统级通知：服务端定时扫描 + Web Push（有订阅时生效）
-  console.log(`  局域网地址: ${lanIp ? `http://${lanIp}:${port}` : '（未检测到可用局域网 IPv4）'}`);
-  if (WANT_PUBLIC) {
-    const settings = await loadSettings();
-    if (!settings.pin) {
-      console.warn('mobile-server: 尚未设置安全密码，公网隧道不自动开启；请先在电脑端面板设置密码，再点「打开公网隧道」');
-    } else {
-      try { await startTunnel(port); } catch (err) {
-        TUNNEL.phase = 'error';
-        TUNNEL.detail = String(err?.message ?? err);
-        console.error('mobile-server: 公网隧道启动失败:', TUNNEL.detail);
-      }
-    }
-  } else {
-    console.log('  公网隧道: 未开启（面板按钮或 --public 开启；开启前需设置安全密码）');
-  }
-  console.log('  电脑端 schedule.html → 「手机访问」面板可显示两个二维码；Ctrl+C 停止。');
+  purgeExpired(); // 启动即清扫一次「过期满 3 个月」的日程（到期即失效不渲染，数据保留 3 个月再清）
+  setInterval(() => { purgeExpired(); }, 6 * 60 * 60 * 1000); // 之后每 6 小时清扫一次
+  console.log(`  直连端口 ${port}：已安全收口——任何来源（含本机）只返回当前 Cloudflare 地址引导页`);
+  console.log(`  功能端口（本机）: 127.0.0.1:${TUNNEL_PORT || port}（隧道回连 + 管理接口）${TUNNEL_URL ? `，公网地址: ${TUNNEL_URL}` : ''}`);
+  console.log('  电脑端 schedule.html → 「手机访问」面板可显示二维码；Ctrl+C 停止。');
 
   // 优雅退出：SIGTERM/SIGINT 或 stdin 收到 "shutdown" 行（DSH 插件回收时发送）
-  // ——先关公网隧道（避免 cloudflared 孤儿进程）再退出
   const graceful = (why) => {
-    console.log(`mobile-server: ${why}，关闭公网隧道并退出`);
-    try { stopTunnel(); } catch (e) { /* 忽略 */ }
+    console.log(`mobile-server: ${why}，退出`);
     process.exit(0);
   };
   process.on('SIGTERM', () => graceful('收到 SIGTERM'));
