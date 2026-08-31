@@ -133,7 +133,7 @@ export const SESSION_MAX = 20;                 // 会话 token 上限（登录�
 export const SESSION_TTL = 30 * 24 * 3600e3;   // 会话 30 天滚动过期（lastSeen 起算）
 
 /** 是否已设密码：新版存 pinHash（scrypt 加盐哈希），旧版遗留明文 pin 迁移期同样视为已设。 */
-export function pinIsSet(settings) { return !!settings.pinHash || !!settings.pin; }
+export function pinIsSet(settings) { return !!settings?.pinHash || !!settings?.pin; }
 
 /** scrypt 加盐哈希（N=16384）：存 {salt,hash}（hex），明文不落盘。 */
 export function hashPin(pin) {
@@ -302,13 +302,11 @@ h1{font-size:17px;margin:0 0 14px}.url a{color:#8ea2ff;font-size:16px;word-break
 
 // ==================== schedule 清除判定（纯函数） ====================
 
-/** 清除判定：过期即失效（渲染/提醒立即停止），但数据保留——截止日期早于「今天往前推 3 个月」才清除。 */
-export function isPurgeableEvent(ev, cutoff) {
-  let dl = (typeof ev.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ev.deadline)) ? ev.deadline : null;
-  if (!dl && ev.type === 'once') dl = (typeof ev.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ev.date)) ? ev.date : null;
-  if (!dl && ev.type === 'custom' && ev.repeat && typeof ev.repeat.until === 'string') dl = ev.repeat.until;
-  return !!dl && dl < cutoff;
-}
+import TTOccur from './occur.js';
+
+/** 清除判定：过期即失效（渲染/提醒立即停止），但数据保留——截止日期早于「今天往前推 3 个月」才清除。
+ *  单一实现于 occur.js（isPurgeable，与 Python timetable_core 对拍一致），此处仅别名导出防双源漂移。 */
+export const isPurgeableEvent = TTOccur.isPurgeable;
 
 // ==================== 路由分发（服务层经 deps 注入） ====================
 
