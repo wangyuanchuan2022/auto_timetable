@@ -111,7 +111,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     if (pubIp) {
       let rr = await rawRequest({ host: pubIp, port: BASE, path: '/api/schedule', method: 'GET', headers: { host: `127.0.0.1:${BASE}` } });
       let body = await readBodyOf(rr);
-      t('S-0 公网源 GET /api/schedule 只回引导页（伪造 loopback Host 无效）', rr.statusCode === 200 && /text\/html/.test(String(rr.headers['content-type'])) && (/trycloudflare\.com|暂不可用/.test(body)), `from=${pubIp}`);
+      // 引导页分源语义（fix(A)）：非 loopback 来源不奉送隧道 URL（防扫描者拿到入口地址）
+      t('S-0 公网源 GET /api/schedule 只回引导页且不泄露隧道地址（伪造 loopback Host 无效）', rr.statusCode === 200 && /text\/html/.test(String(rr.headers['content-type'])) && /请使用安全地址/.test(body) && !/trycloudflare\.com/.test(body), `from=${pubIp}`);
       rr = await rawRequest({ host: pubIp, port: BASE, path: '/api/login', method: 'POST', headers: { 'content-type': 'application/json' } }, JSON.stringify({ pin: 'whatever' }));
       t('S-0 公网源 /api/login 403（无登录面）', rr.statusCode === 403, 'status=' + rr.statusCode);
     } else {

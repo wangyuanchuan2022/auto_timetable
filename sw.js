@@ -20,10 +20,14 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const url = (event.notification.data && event.notification.data.url) || '/';
   event.waitUntil((async () => {
+    // 优先聚焦属于本 SW scope 的窗口（多站点/多 PWA 窗口并存时不误跳他站）；
+    // 找不到再聚焦任意窗口；都没有才开新窗。includeUncontrolled 确保未受控窗口也在候选内。
+    const scope = self.registration.scope;
     const cs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    for (const c of cs) {
-      if ('focus' in c) { await c.focus(); return; }
-    }
+    const own = cs.find((c) => c.url && c.url.startsWith(scope));
+    if (own && 'focus' in own) { await own.focus(); return; }
+    const any = cs.find((c) => 'focus' in c);
+    if (any) { await any.focus(); return; }
     if (self.clients.openWindow) await self.clients.openWindow(url);
   })());
 });

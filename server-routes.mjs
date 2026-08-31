@@ -340,8 +340,10 @@ export function createRouteDispatcher(deps) {
       const html = await readFile(MOBILE_HTML_PATH);
       return send(res, 200, html, {
         'content-type': 'text/html; charset=utf-8',
-        // CSP：限制连接源为本站（防外泄），图片允许 data:/blob:（压缩预览）；拒绝被嵌入 iframe
-        'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'",
+        // CSP：限制连接源为本站（防外泄），图片允许 data:/blob:（压缩预览）；拒绝被嵌入 iframe。
+        // 脚本已全部外链（/occur.js + /mobile-app.js）→ script-src 只留 'self'（Y-1 收紧）；
+        // style 的 'unsafe-inline' 为遗留（页面仍有内联样式），待样式外链化后再收。
+        'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'",
       });
     }
     if (req.method === 'GET' && pathname === '/mobile-app.js') {

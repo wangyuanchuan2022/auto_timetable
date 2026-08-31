@@ -25,13 +25,13 @@ import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import { createInterface } from 'node:readline';
 import { readFile, writeFile, mkdir, open, rename } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { withSetup, stripSetup } from './chat-setup.mjs';
 import TTOccur from './occur.js'; // 共享领域判定核心（与网页端 / Python timetable_core.py 同一语义）
 import {
-  createRouteDispatcher, checkPin, clientIpOf, pinIsSet, hashPin, isPurgeableEvent, isLoopbackHostname,
+  createRouteDispatcher, checkPin, clientIpOf, pinIsSet, hashPin, isLoopbackHostname,
   sendJSON,
 } from './server-routes.mjs';
 
@@ -41,7 +41,10 @@ const SCHEDULE_PATH = join(HERE, 'schedule.json');
 const MOBILE_HTML_PATH = join(HERE, 'mobile.html');
 const OCCUR_JS_PATH = join(HERE, 'occur.js'); // 手机页 <script src="/occur.js"> 的静态托管来源
 const MOBILE_APP_JS_PATH = join(HERE, 'mobile-app.js'); // 手机页主脚本（自 mobile.html 内联抽离）
-const BIN_CACHE_DIR = join(HERE, '.mobile-srv');
+// 运行时数据目录：默认 .mobile-srv；TT_DATA_DIR 环境变量可整体重定向
+// （settings/subs/fired/port/tunnel-port/tunnel.json/tunnel.log 全部跟随——
+//  F-2 等测试用它跑隔离实例，不污染生产目录；schedule.json 属项目数据，不随迁）。
+const BIN_CACHE_DIR = process.env.TT_DATA_DIR ? resolve(process.env.TT_DATA_DIR) : join(HERE, '.mobile-srv');
 const SETTINGS_PATH = join(BIN_CACHE_DIR, 'settings.json'); // 安全密码仅存本机此文件
 const SUBS_PATH = join(BIN_CACHE_DIR, 'push-subscriptions.json'); // Web Push 订阅（每设备一条）
 const FIRED_PATH = join(BIN_CACHE_DIR, 'remind-fired.json'); // 服务端已推送的提醒键（48h 清理）
@@ -495,7 +498,8 @@ async function loadSchedule() {
   } catch { return scheduleCache.data ?? { events: [] }; }
 }
 
-/** 到期自动清理（保留 3 个月）：把「截止日期已过满 3 个月」的日程从 schedule.json 删除（2 空格缩进风格）。 */
+/** 到期自动归档（保留 3 个月）：把「截止日期已过满 3 个月」的日程移入 data.archive
+ *  （附 archivedAt 时间戳，不再删除数据——判定/搬移走共享纯函数 TTOccur.archiveFor）。 */
 async function purgeExpired() {
   try {
     const now = new Date();
@@ -504,15 +508,14 @@ async function purgeExpired() {
     const cutoff = srvFmtDate(cutoffDate);
     const data = JSON.parse(await readFile(SCHEDULE_PATH, 'utf8'));
     const before = (data.events ?? []).length;
-    const kept = (data.events ?? []).filter(ev => !isPurgeableEvent(ev, cutoff)); // 纯判定在 server-routes.mjs
-    if (kept.length === before) return 0;
-    data.events = kept;
-    await atomicWriteFile(SCHEDULE_PATH, JSON.stringify(data, null, 2) + '\n');
+    const next = TTOccur.archiveFor(data, cutoff); // 原样返回同一引用 = 无可归档项
+    if (next === data) return 0;
+    await atomicWriteFile(SCHEDULE_PATH, JSON.stringify(next, null, 2) + '\n');
     scheduleCache = { at: 0, data: null }; // 失效缓存，下次读取拿新数据
-    console.log(`[purge] 已清除 ${before - kept.length} 条过期满 3 个月（截止早于 ${cutoff}）的日程（剩余 ${kept.length} 条）`);
-    return before - kept.length;
+    console.log(`[purge] 已归档 ${before - next.events.length} 条过期满 3 个月（截止早于 ${cutoff}）的日程（剩余 ${next.events.length} 条）`);
+    return before - next.events.length;
   } catch (e) {
-    console.error('[purge] 到期清理失败:', e?.message || e);
+    console.error('[purge] 到期归档失败:', e?.message || e);
     return 0;
   }
 }
