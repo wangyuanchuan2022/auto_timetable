@@ -85,6 +85,29 @@
     .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; font-size: 13.5px; word-break: break-word; white-space: pre-wrap; }
     .bUser { align-self: flex-end; background: #4f6ef7; color: #fff; border-bottom-right-radius: 4px; }
     .bBot { align-self: flex-start; background: rgba(128,128,128,.14); border-bottom-left-radius: 4px; }
+    /* Markdown 元素（消息气泡内；构建方式见 mdRender——仅 createElement/textContent，不进 HTML） */
+    .bubble p { margin: 0 0 .5em; }
+    .bubble > :last-child { margin-bottom: 0; }
+    .bubble h1, .bubble h2, .bubble h3, .bubble h4, .bubble h5, .bubble h6 { margin: .3em 0 .35em; line-height: 1.35; }
+    .bubble h1 { font-size: 1.28em; } .bubble h2 { font-size: 1.2em; } .bubble h3 { font-size: 1.12em; }
+    .bubble h4, .bubble h5, .bubble h6 { font-size: 1.05em; }
+    .bubble pre { margin: .45em 0; padding: 8px 10px; border-radius: 8px; background: rgba(128,128,128,.13); overflow-x: auto; }
+    .bubble pre.mdCode::before { content: attr(data-lang); display: block; font-size: 10.5px; opacity: .65; margin-bottom: 4px; }
+    .bubble pre.mdCode:not([data-lang])::before { content: none; }
+    .bubble pre code { display: block; white-space: pre; background: none; padding: 0; font-size: 12px; }
+    .bubble code { font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace; font-size: .92em; background: rgba(128,128,128,.16); border-radius: 5px; padding: .08em .35em; }
+    .bUser pre { background: rgba(0,0,0,.22); }
+    .bUser code { background: rgba(0,0,0,.22); }
+    .bubble table { border-collapse: collapse; margin: .45em 0; display: block; max-width: 100%; overflow-x: auto; }
+    .bubble th, .bubble td { border: 1px solid rgba(128,128,128,.4); padding: 4px 8px; font-size: .95em; }
+    .bubble blockquote { margin: .4em 0; padding: .1em .8em; border-left: 3px solid rgba(128,128,128,.45); }
+    .bubble ul, .bubble ol { margin: .35em 0; padding-left: 1.35em; }
+    .bubble li { margin: .15em 0; }
+    .bubble li.mdTask { list-style: none; margin-left: -1.15em; }
+    .bubble hr { border: none; border-top: 1px solid rgba(128,128,128,.4); margin: .6em 0; }
+    .bBot a { color: #4f6ef7; text-decoration: underline; word-break: break-all; }
+    .bUser a { color: #fff; text-decoration: underline; word-break: break-all; }
+    @media (prefers-color-scheme: dark) { .bBot a { color: #8ea2ff; } }
     /* 问题 / 批准交互卡片 */
     .qcard { align-self: stretch; border: 1px solid #4f6ef7; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
     .qcard.done { opacity: .55; border-color: rgba(128,128,128,.4); }
@@ -153,7 +176,10 @@
     <div class="chat">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
         <h3 style="margin:0 0 8px;font-size:14px">对话电脑端 DSH</h3>
-        <button id="modelBtn" style="padding:4px 10px;border-radius:999px;border:1px solid #d1d5db;background:transparent;color:inherit;font:inherit;font-size:11.5px;flex:none;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">模型：…</button>
+        <div style="display:flex;gap:6px;align-items:center;flex:none;min-width:0">
+          <button id="newChatBtn" style="padding:4px 10px;border-radius:999px;border:1px solid #d1d5db;background:transparent;color:inherit;font:inherit;font-size:11.5px;flex:none">✚ 新对话</button>
+          <button id="modelBtn" style="padding:4px 10px;border-radius:999px;border:1px solid #d1d5db;background:transparent;color:inherit;font:inherit;font-size:11.5px;flex:none;max-width:38vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">模型：…</button>
+        </div>
       </div>
       <div class="chatLog" id="chatLog"></div>
       <div class="thumbs" id="chatThumbs" style="display:none"></div>
@@ -190,12 +216,39 @@
       });
     }
 
-    // 密码错误 / 未登录时提示输入，返回密码或 null
+    // 密码错误 / 未登录时弹出页内密码输入框（type=password），返回 Promise<密码或 null>。
+    // 不再用 window.prompt：手机端 prompt 输入体验差、部分内嵌浏览器会拦截。
     function askPin(wasWrong) {
-      var msg = wasWrong ? '密码不正确，请重新输入：' : '本日程受安全密码保护，请输入密码：';
-      var pin = '';
-      try { window.prompt && (pin = window.prompt(msg, '')); } catch (e) { return null; }
-      return pin === null ? null : String(pin);
+      return new Promise(function (resolve) {
+        var mask = document.createElement('div');
+        mask.className = 'mask';
+        mask.innerHTML =
+          '<div class="dlg" role="dialog">' +
+          '  <h2>安全密码</h2>' +
+          '  <div class="rep muted" id="pMsg"></div>' +
+          '  <div class="field"><input type="password" id="pIn" placeholder="请输入安全密码" autocomplete="current-password" enterkeyhint="go" /></div>' +
+          '  <div class="btns">' +
+          '    <button class="btn btnCancel" id="pCancel">取消</button>' +
+          '    <button class="btn btnSave" id="pOk">确认</button>' +
+          '  </div>' +
+          '</div>';
+        document.body.appendChild(mask);
+        var msgEl = mask.querySelector('#pMsg');
+        var input = mask.querySelector('#pIn');
+        var okBtn = mask.querySelector('#pOk');
+        if (msgEl) msgEl.textContent = wasWrong ? '密码不正确，请重新输入：' : '本日程受安全密码保护，请输入密码：';
+        function close(val) { mask.parentNode && mask.parentNode.removeChild(mask); resolve(val); }
+        okBtn.onclick = function () {
+          var v = String((input && input.value) || '');
+          if (!v) { if (msgEl) msgEl.textContent = '密码不能为空，请输入后确认'; return; }
+          close(v);
+        };
+        var cancelBtn = mask.querySelector('#pCancel');
+        if (cancelBtn) cancelBtn.onclick = function () { close(null); };
+        mask.addEventListener('click', function (e) { if (e.target === mask) close(null); });
+        if (input) input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); okBtn.click(); } });
+        try { input && input.focus(); } catch (e) {}
+      });
     }
 
     // 全局登录闸门：并发的多个 401（日程请求 / watch 流等）共享同一次弹窗与登录，
@@ -207,20 +260,21 @@
       if (authInFlight) return authInFlight;
       authInFlight = new Promise(function (resolve) {
         var attempt = function (wasWrong) {
-          var pin = askPin(wasWrong);
-          if (pin === null) { authInFlight = null; resolve(false); return; }
-          login(pin)
-            .then(function () { authOk = true; authInFlight = null; resolve(true); })
-            .catch(function (err) {
-              var msg = String(err && err.message || '');
-              if (msg.indexOf('稍后再试') > -1 || msg.indexOf('badpin') === -1) {
-                bubble('登录失败：' + (msg || '未知错误'), 'bot');
-                authInFlight = null;
-                resolve(false);
-                return;
-              }
-              attempt(true); // 只有真的输错才提示"密码不正确"并重问
-            });
+          askPin(wasWrong).then(function (pin) {
+            if (pin === null) { authInFlight = null; resolve(false); return; }
+            login(pin)
+              .then(function () { authOk = true; authInFlight = null; resolve(true); })
+              .catch(function (err) {
+                var msg = String(err && err.message || '');
+                if (msg.indexOf('稍后再试') > -1 || msg.indexOf('badpin') === -1) {
+                  bubble('登录失败：' + (msg || '未知错误'), 'bot');
+                  authInFlight = null;
+                  resolve(false);
+                  return;
+                }
+                attempt(true); // 只有真的输错才提示"密码不正确"并重问
+              });
+          });
         };
         attempt(false);
       });
@@ -252,6 +306,7 @@
 
     function occursOn(ev, day) {
       var ds = fmtDate(day);
+      if (ev.deadline && ds > ev.deadline) return false; // 截止日期：到该日（含）为止生效
       var type = ev.type || 'once';
       if (type === 'weekly') return isoWeekday(day) === (ev.weekday || 1);
       if (type === 'once') return ev.date === ds;
@@ -283,11 +338,17 @@
 
     function describeRepeat(ev) {
       var t = ev.type || 'once';
-      if (t === 'weekly') return '每周重复 · ' + (DAY_FULL[(ev.weekday || 1) - 1] || '');
-      if (t === 'once') return '一次性 · ' + (ev.date || '');
-      var r = ev.repeat || {};
-      var unitMap = { day: '天', week: '周', month: '月' };
-      return '每 ' + (parseInt(r.interval, 10) || 1) + ' ' + (unitMap[r.unit || 'day'] || '天') + '重复 · 自 ' + (r.start || '?');
+      var s;
+      if (t === 'weekly') s = '每周重复 · ' + (DAY_FULL[(ev.weekday || 1) - 1] || '');
+      else if (t === 'once') s = '一次性 · ' + (ev.date || '');
+      else {
+        var r = ev.repeat || {};
+        var unitMap = { day: '天', week: '周', month: '月' };
+        s = '每 ' + (parseInt(r.interval, 10) || 1) + ' ' + (unitMap[r.unit || 'day'] || '天') + '重复 · 自 ' + (r.start || '?');
+        if (r.until) s += ' 至 ' + r.until;
+      }
+      if (t !== 'once' && ev.deadline) s += ' · 截止 ' + ev.deadline;
+      return s;
     }
 
     function load() {
@@ -355,6 +416,12 @@
           m.textContent = ev.location;
           body.appendChild(m);
         }
+        if (ev.deadline && (ev.type || 'once') !== 'once') {
+          var dlm = document.createElement('div');
+          dlm.className = 'meta muted';
+          dlm.textContent = '⏱ 截止 ' + ev.deadline;
+          body.appendChild(dlm);
+        }
 
         it.appendChild(bar); it.appendChild(time); it.appendChild(body);
         it.onclick = function () { openDialog(ev); };
@@ -381,10 +448,12 @@
         '  <div class="field"><label>地点</label><input id="dLoc" placeholder="可选" /></div>' +
         '  <div class="field"><label>备注</label><input id="dNote" placeholder="可选" /></div>' +
         '  <div class="field"><label>提前提醒（分钟，0 = 不提醒，默认 20）</label><input type="number" id="dLead" min="0" max="1440" step="1" /></div>' +
+        '  <div class="field"><label>截止日期（到该日（含）为止生效；过期满 3 个月自动清除）</label><input type="date" id="dDeadline" /></div>' +
         '  <div class="btns">' +
         '    <button class="btn btnCancel" id="dCancel">取消</button>' +
         '    <button class="btn btnSave" id="dSave">保存</button>' +
         '  </div>' +
+        '  <button class="btn" id="dDel" style="background:transparent;border:1px solid #cf222e;color:#cf222e;margin-top:10px">删除此事件</button>' +
         '  <div class="dlgMsg" id="dMsg"></div>' +
         '</div>';
       document.body.appendChild(mask);
@@ -395,11 +464,60 @@
       $('dLoc').value = ev.location || '';
       $('dNote').value = ev.note || '';
       $('dLead').value = (typeof ev.remindLead === 'number' && isFinite(ev.remindLead)) ? ev.remindLead : 20;
+      $('dDeadline').value = ev.deadline || '';
       $('dMsg').textContent = '';
 
       function close() { mask.parentNode && mask.parentNode.removeChild(mask); editEv = null; }
       $('dCancel').onclick = close;
       mask.addEventListener('click', function (e) { if (e.target === mask) close(); });
+
+      // 删除此事件：两段式确认（首点武装变红「确认删除？」，3 秒内再点一次才生效）
+      var delArmed = false;
+      var delBtn = $('dDel');
+      delBtn.onclick = function () {
+        if (!editEv) return;
+        if (!delArmed) {
+          delArmed = true;
+          delBtn.textContent = '确认删除？再点一次生效';
+          delBtn.style.background = '#cf222e';
+          delBtn.style.color = '#fff';
+          setTimeout(function () {
+            if (delArmed) {
+              delArmed = false;
+              delBtn.textContent = '删除此事件';
+              delBtn.style.background = 'transparent';
+              delBtn.style.color = '#cf222e';
+            }
+          }, 3000);
+          return;
+        }
+        delArmed = false;
+        delBtn.disabled = true;
+        var msgEl = $('dMsg');
+        msgEl.className = 'dlgMsg';
+        msgEl.textContent = '正在删除…';
+        var arr = (data && data.events) || [];
+        var idx = arr.indexOf(editEv);
+        if (idx > -1) arr.splice(idx, 1);
+        apiFetch(API_WRITE, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: JSON.stringify(data, null, 2) })
+        }).then(function (r) {
+          if (!r.ok) throw new Error('http ' + r.status);
+          return r.json();
+        }).then(function (j) {
+          if (!j.ok) throw new Error(j.error || 'write failed');
+          msgEl.textContent = '已删除，电脑端同步生效 ✓';
+          msgEl.classList.add('ok');
+          setTimeout(function () { close(); render(); }, 500);
+        }).catch(function (err) {
+          if (idx > -1) arr.splice(idx, 0, editEv); // 写回失败：把事件放回原位，内存与文件保持一致
+          delBtn.disabled = false;
+          msgEl.textContent = '删除失败：' + (err.message || err);
+          msgEl.classList.add('err');
+        });
+      };
       $('dSave').onclick = function () {
         if (!editEv) return;
         var title = String($('dTitle').value || '').trim();
@@ -419,6 +537,11 @@
         var leadVal = parseInt($('dLead').value, 10);
         if (!isNaN(leadVal) && leadVal >= 0 && leadVal <= 1440) editEv.remindLead = leadVal;
         else delete editEv.remindLead; // 缺省回落到默认 20 分钟
+        var dl = $('dDeadline').value;
+        if (dl) editEv.deadline = dl;
+        else if ((editEv.type || 'once') === 'once' && editEv.date) editEv.deadline = editEv.date; // 一次性：留空即事件当日
+        else if (editEv.repeat && editEv.repeat.until) editEv.deadline = editEv.repeat.until; // 与重复结束日对齐
+        else delete editEv.deadline;
         msgEl.textContent = '正在保存…';
         apiFetch(API_WRITE, {
           method: 'POST',
@@ -694,6 +817,43 @@
     apiFetch('/api/chat/models', { cache: 'no-store' }).then(function (r) { return r.json(); })
       .then(function (j) { if (j.ok) setModelLabel(j.current); }).catch(function () {});
 
+    // ---------- 新建对话：丢弃当前专属会话（历史仍保留在电脑端 DSH），另建全新会话 ----------
+    var chatGen = 0;       // 会话代数：reset 后旧发送流的帧回调按代数丢弃，不再写入新对话
+    var newChatArmed = 0;  // 两段式确认：3 秒内再点一次才执行（防手机误触）
+    function newChatLabel(s) { $('newChatBtn').textContent = s; }
+    function doNewChat() {
+      newChatLabel('新建中…');
+      $('newChatBtn').disabled = true;
+      apiFetch('/api/chat/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (!j.ok) throw new Error(j.error || 'failed');
+          chatGen++;
+          // 清空本地渲染状态（seq 去重表 / 思考块 / 工具卡 / 交互卡 / 流式气泡 / 待确认气泡）
+          renderedSeqs = {}; reasoningSeen = {}; toolEls = {}; liveCards = {};
+          pendingLocalUser = null; reasonEl = null; dropLive();
+          chatBusyUI = false; $('chatSend').disabled = false; $('chatAttach').disabled = false;
+          $('chatLog').innerHTML = '';
+          openWatch(); // watch 流重连：服务端按新会话下发空快照，旧会话事件不再到达
+          bubble('已开启新对话。之前的对话仍保留在电脑端 DSH。', 'bot');
+        })
+        .catch(function (err) { bubble('新建对话失败：' + (err.message || err), 'bot'); })
+        .then(function () { $('newChatBtn').disabled = false; newChatLabel('✚ 新对话'); });
+    }
+    $('newChatBtn').onclick = function () {
+      if ($('newChatBtn').disabled) return;
+      if (chatBusyUI) { newChatLabel('处理中，稍候…'); setTimeout(function () { newChatLabel('✚ 新对话'); }, 1500); return; }
+      var now = Date.now();
+      if (now - newChatArmed > 3000) { // 首点：仅武装确认，不执行
+        newChatArmed = now;
+        newChatLabel('再点一次确认清空');
+        setTimeout(function () { if (Date.now() - newChatArmed >= 2900) newChatLabel('✚ 新对话'); }, 3000);
+        return;
+      }
+      newChatArmed = 0;
+      doNewChat();
+    };
+
     function checkReminders() {
       if (remindOpen) return;
       var cands = reminderCandidates(new Date());
@@ -706,11 +866,267 @@
     });
 
     // ---------- 对话电脑端 DSH（双端同会话：watch 流原样镜像电脑端与手机端的消息） ----------
-    function bubble(text, who) {
+
+    // ---------- Markdown 渲染（安全语义对齐官方 DSH 前端 MarkdownText，即 dsh-pocket 镜像到手机的渲染） ----------
+    // 不变量：① 只用 createElement/textContent 构建节点，消息源文本里的 HTML 一律按字面文本
+    // 显示、绝不进 DOM（天然防 XSS）；② 链接仅允许 http/https/mailto（与官方 sanitizeUrl 一致），
+    // javascript: 等按纯文本渲染；③ 远程图片不内嵌（CSP img-src 亦不允许 http），渲染为可点链接。
+    function mdSafeUrl(url) {
+      try {
+        var p = new URL(url).protocol;
+        if (p === 'http:' || p === 'https:' || p === 'mailto:') return url;
+      } catch (e) {}
+      return '';
+    }
+    function mdLink(href, text, imgChip) {
+      var a = document.createElement('a');
+      a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.textContent = (imgChip ? '🖼 ' : '') + (text || href);
+      return a;
+    }
+    // 行内解析：反斜杠转义 / 代码 span / 图片 / 链接 / 裸 URL 自动链接 / 粗体 / 删除线 / 斜体
+    function mdInline(parent, s) {
+      var i = 0, n = s.length, buf = '';
+      function flush() { if (buf) { parent.appendChild(document.createTextNode(buf)); buf = ''; } }
+      while (i < n) {
+        var c = s[i], m;
+        if (c === '\\' && i + 1 < n && /[\\`*_{}[\]()#+\-.!>~|]/.test(s[i + 1])) { buf += s[i + 1]; i += 2; continue; }
+        if (c === '`') {
+          var ticks = s.slice(i).match(/^`+/)[0];
+          var close = s.indexOf(ticks, i + ticks.length);
+          if (close > i + ticks.length) {
+            flush();
+            var codeEl = document.createElement('code');
+            codeEl.textContent = s.slice(i + ticks.length, close).replace(/\n/g, ' ');
+            parent.appendChild(codeEl);
+            i = close + ticks.length;
+            continue;
+          }
+        }
+        m = /^!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/.exec(s.slice(i));
+        if (m) {
+          flush();
+          var iu = mdSafeUrl(m[2]);
+          parent.appendChild(iu ? mdLink(iu, m[1] || m[2], true) : document.createTextNode(m[0]));
+          i += m[0].length; continue;
+        }
+        m = /^\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/.exec(s.slice(i));
+        if (m) {
+          flush();
+          var lu = mdSafeUrl(m[2]);
+          if (lu) {
+            var la = document.createElement('a');
+            la.href = lu; la.target = '_blank'; la.rel = 'noopener noreferrer';
+            mdInline(la, m[1] || m[2]);
+            parent.appendChild(la);
+          } else parent.appendChild(document.createTextNode(m[0]));
+          i += m[0].length; continue;
+        }
+        m = /^https?:\/\/[^\s<>()[\]]+/.exec(s.slice(i));
+        if (m) {
+          var url = m[0].replace(/[.,;:!?，。；：！？）】》”’]+$/, '');
+          if (url) {
+            flush();
+            parent.appendChild(mdLink(url, url));
+            i += url.length; continue;
+          }
+        }
+        m = /^(\*\*|__)(?=\S)([\s\S]*?\S)\1/.exec(s.slice(i));
+        if (m && (m[1] === '**' || !/[\w]/.test(s[i - 1] || ''))) { // _ 粗体不允许词内
+          flush();
+          var strong = document.createElement('strong');
+          mdInline(strong, m[2]);
+          parent.appendChild(strong);
+          i += m[0].length; continue;
+        }
+        m = /^~~(?=\S)([\s\S]*?\S)~~/.exec(s.slice(i));
+        if (m) {
+          flush();
+          var del = document.createElement('del');
+          mdInline(del, m[1]);
+          parent.appendChild(del);
+          i += m[0].length; continue;
+        }
+        m = /^\*(?=\S)([\s\S]*?\S)\*/.exec(s.slice(i));
+        if (m) {
+          flush();
+          var em1 = document.createElement('em');
+          mdInline(em1, m[1]);
+          parent.appendChild(em1);
+          i += m[0].length; continue;
+        }
+        m = /^_(?=\S)([\s\S]*?\S)_/.exec(s.slice(i));
+        if (m && !/[\w]/.test(s[i - 1] || '') && !/[\w]/.test(s[i + m[0].length] || '')) { // _ 斜体需词边界
+          flush();
+          var em2 = document.createElement('em');
+          mdInline(em2, m[1]);
+          parent.appendChild(em2);
+          i += m[0].length; continue;
+        }
+        buf += c; i++;
+      }
+      flush();
+    }
+    // 表格行拆分（尊重 \| 转义，去首尾管道）
+    function mdSplitRow(line) {
+      var t = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+      return t.replace(/\\\|/g, '\u0000').split('|').map(function (cell) { return cell.replace(/\u0000/g, '|').trim(); });
+    }
+    // 列表（缩进嵌套 + 任务列表 [x]）；返回 { el, i }
+    function mdList(lines, i) {
+      var first = /^( *)([-*+]|\d{1,9}[.)])\s+/.exec(lines[i]);
+      var indent = first[1].length;
+      var ordered = /\d/.test(first[2]);
+      var list = document.createElement(ordered ? 'ol' : 'ul');
+      var itemRe = new RegExp('^( *)(' + (ordered ? '\\d{1,9}[.)]' : '[-*+]') + ')\\s+');
+      while (i < lines.length) {
+        if (!lines[i].trim()) {
+          var nm = i + 1 < lines.length ? itemRe.exec(lines[i + 1]) : null; // 空行后仍有同级条目 → 宽松列表继续
+          if (nm && nm[1].length === indent) { i++; continue; }
+          break;
+        }
+        var m = itemRe.exec(lines[i]);
+        if (!m || m[1].length !== indent) break; // 缩进不同 → 交给上层/嵌套处理
+        var li = document.createElement('li');
+        var content = [lines[i].slice(m[0].length)];
+        i++;
+        while (i < lines.length && lines[i].trim()) { // 收集延续行：更深缩进（嵌套列表/段落延续）
+          var mm = itemRe.exec(lines[i]);
+          if (mm && mm[1].length <= indent) break;   // 同级/更浅条目 → 本条目结束
+          content.push(lines[i].replace(new RegExp('^ {' + (indent + 2) + '}'), ''));
+          i++;
+        }
+        var tm = /^\[([ xX])\]\s+/.exec(content[0]);
+        if (tm) { // 任务列表
+          li.className = 'mdTask';
+          var box = document.createElement('span');
+          box.textContent = tm[1] === ' ' ? '☐' : '☑';
+          li.appendChild(box);
+          li.appendChild(document.createTextNode(' '));
+          content[0] = content[0].slice(tm[0].length);
+        }
+        var holder = document.createElement('div');
+        mdBlocks(holder, content);
+        while (holder.firstChild) li.appendChild(holder.firstChild);
+        list.appendChild(li);
+      }
+      return { el: list, i: i };
+    }
+    // 块级解析：fenced 代码块 / 标题 / 分隔线 / 引用块 / GFM 表格 / 列表 / 段落（软换行 → <br>）
+    function mdBlocks(parent, lines) {
+      var i = 0;
+      while (i < lines.length) {
+        var line = lines[i];
+        if (!line.trim()) { i++; continue; }
+        var mF = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+        if (mF) {
+          var fenceChar = mF[1][0];
+          var closeRe = new RegExp('^ {0,3}\\' + fenceChar + '{3,}\\s*$');
+          var body = [];
+          i++;
+          while (i < lines.length && !closeRe.test(lines[i])) { body.push(lines[i]); i++; }
+          if (i < lines.length) i++; // 跳过闭合围栏
+          var pre = document.createElement('pre');
+          pre.className = 'mdCode';
+          var lang = mF[2].trim();
+          if (lang) pre.setAttribute('data-lang', lang);
+          var codeBlock = document.createElement('code');
+          codeBlock.textContent = body.join('\n');
+          pre.appendChild(codeBlock);
+          parent.appendChild(pre);
+          continue;
+        }
+        var mH = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+        if (mH) {
+          var h = document.createElement('h' + mH[1].length);
+          mdInline(h, mH[2]);
+          parent.appendChild(h);
+          i++; continue;
+        }
+        if (/^\s{0,3}((-\s*){3,}$|(\*\s*){3,}$|(_\s*){3,}$)/.test(line)) {
+          parent.appendChild(document.createElement('hr'));
+          i++; continue;
+        }
+        if (/^ {0,3}>/.test(line)) {
+          var q = [];
+          while (i < lines.length && /^ {0,3}>/.test(lines[i])) { q.push(lines[i].replace(/^ {0,3}>\s?/, '')); i++; }
+          var bq = document.createElement('blockquote');
+          mdBlocks(bq, q);
+          parent.appendChild(bq);
+          continue;
+        }
+        if (line.indexOf('|') !== -1 && i + 1 < lines.length && lines[i + 1].indexOf('|') !== -1 &&
+            /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+          var head = mdSplitRow(line);
+          var aligns = mdSplitRow(lines[i + 1]).map(function (cell) {
+            var l = cell[0] === ':', r = cell[cell.length - 1] === ':';
+            return (l && r) ? 'center' : (r ? 'right' : (l ? 'left' : ''));
+          });
+          i += 2;
+          var tbl = document.createElement('table');
+          var thead = document.createElement('thead');
+          var trh = document.createElement('tr');
+          head.forEach(function (cellText, ci) {
+            var th = document.createElement('th');
+            if (aligns[ci]) th.style.textAlign = aligns[ci];
+            mdInline(th, cellText);
+            trh.appendChild(th);
+          });
+          thead.appendChild(trh);
+          tbl.appendChild(thead);
+          var tbody = document.createElement('tbody');
+          while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') !== -1) {
+            var tr = document.createElement('tr');
+            mdSplitRow(lines[i]).forEach(function (cellText, ci) {
+              var td = document.createElement('td');
+              if (aligns[ci]) td.style.textAlign = aligns[ci];
+              mdInline(td, cellText);
+              tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+            i++;
+          }
+          tbl.appendChild(tbody);
+          parent.appendChild(tbl);
+          continue;
+        }
+        if (/^ *([-*+]|\d{1,9}[.)])\s+/.test(line)) {
+          var res = mdList(lines, i);
+          parent.appendChild(res.el);
+          i = res.i;
+          continue;
+        }
+        var para = [line]; // 段落：累积到空行或块级起始
+        i++;
+        while (i < lines.length && lines[i].trim() &&
+            !/^ {0,3}(`{3,}|~{3,})/.test(lines[i]) &&
+            !/^ {0,3}#{1,6}\s/.test(lines[i]) &&
+            !/^ {0,3}>/.test(lines[i]) &&
+            !/^ *([-*+]|\d{1,9}[.)])\s+/.test(lines[i]) &&
+            !/^\s{0,3}((-\s*){3,}$|(\*\s*){3,}$|(_\s*){3,}$)/.test(lines[i])) {
+          para.push(lines[i]);
+          i++;
+        }
+        var pe = document.createElement('p');
+        for (var pi = 0; pi < para.length; pi++) {
+          if (pi) pe.appendChild(document.createElement('br'));
+          mdInline(pe, para[pi]);
+        }
+        parent.appendChild(pe);
+      }
+    }
+    // 渲染入口：清空后按块解析重建（流式 partial 每帧全量重渲染，规模小、无性能问题）
+    function mdRender(el, src) {
+      el.textContent = '';
+      mdBlocks(el, String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n'));
+    }
+
+    function bubble(text, who, md) {
       var log = $('chatLog');
       var b = document.createElement('div');
       b.className = 'bubble ' + (who === 'user' ? 'bUser' : 'bBot');
-      b.textContent = text;
+      if (md) { b._mdRaw = text; mdRender(b, text); } // _mdRaw：去重「原位采纳」比对原始文本
+      else b.textContent = text;
       log.appendChild(b);
       b.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       return b;
@@ -719,6 +1135,8 @@
     // ---- 权威渲染：/api/chat/watch（优先 WebSocket——公网隧道会缓冲 GET SSE 流式响应体，
     //      WS 帧不被缓冲且支持心跳保活（与 dsh-pocket 一致）；WS 不可用时回落 EventSource SSE） ----
     var renderedSeqs = {};   // 已渲染帧 seq → true（快照/兜底轮询幂等去重）
+    var watchSid = null;     // 当前 watch 绑定的宿主会话 id（hello 帧携带；会话重建后 seq 撞号，需清表）
+    var lastWatchFrameTs = Date.now(); // 最近一次收到 watch 帧（含 ping）的时间：静默僵尸连接检测
     var liveEl = null;       // 流式增量气泡（手机发送与电脑端生成共用）
     var lastPartialText = '';
     var pendingLocalUser = null; // 手机刚发出、尚未被 watch 确认的用户气泡 {text, el}
@@ -820,20 +1238,28 @@
       if (!msg || renderedSeqs[msg.seq]) return;
       renderedSeqs[msg.seq] = true;
       if (msg.role === 'user') {
-        // 手机本地刚发的同文本气泡 → 原位采纳（避免重复）
-        var log = $('chatLog');
-        var last = log.lastElementChild;
-        if (last && last.classList.contains('bUser') && last.getAttribute('data-local') === '1' && last.textContent === msg.text) {
-          last.removeAttribute('data-local');
-          pendingLocalUser = null;
-          return;
+        // 手机本地刚发的同文本气泡 → 原位采纳（避免重复）。
+        // 不能用「对话区最后一个元素」判断：发送后末尾会紧跟流式气泡/思考块/工具卡，
+        // 待确认的用户气泡不在最后。优先用发送时记录的元素引用（pendingLocalUser.el）定位，
+        // 找不到时再向前小范围扫描兜底。比对用 _mdRaw（markdown 渲染前的原始文本）。
+        var sameText = function (el) { return (el._mdRaw !== undefined && el._mdRaw === msg.text) || el.textContent === msg.text; };
+        var take = null;
+        var p = pendingLocalUser;
+        if (p && p.el && p.el.parentNode && p.el.getAttribute('data-local') === '1' && sameText(p.el)) {
+          take = p.el;
+        } else {
+          var kids = $('chatLog').children;
+          for (var i = kids.length - 1; i >= 0 && i >= kids.length - 8; i--) {
+            if (kids[i].classList.contains('bUser') && kids[i].getAttribute('data-local') === '1' && sameText(kids[i])) { take = kids[i]; break; }
+          }
         }
+        if (take) { take.removeAttribute('data-local'); pendingLocalUser = null; return; }
         settleReasoning(); // 新一轮对话开始
-        bubble(msg.text, 'user');
+        bubble(msg.text, 'user', true);
       } else {
         dropLive(); // 最终消息覆盖流式气泡
         settleReasoning(); // 思考过程收起保留在对话流中
-        bubble(msg.text, 'bot');
+        bubble(msg.text, 'bot', true);
         load(); // DSH 可能修改了 schedule.json
       }
     }
@@ -842,15 +1268,43 @@
     var watchES = null;
     var watchTransport = 'none';
     var reasoningSeen = {}; // 快照思考块去重（内容前缀 → true）
+    // ---- 日程自动刷新：最终消息落地时必刷新；工具结果到达时节流刷新 ----
+    // DSH 修改 schedule.json 的标志是写文件工具返回；不等最终消息，改完即刷，
+    // 即使消息帧丢失/延迟，日程视图也能跟上（此前只在最终消息帧刷新，帧一丢就"要手动刷新才可见"）
+    var lastSchedRefreshTs = 0;
+    function scheduleMaybeChanged() {
+      var now = Date.now();
+      if (now - lastSchedRefreshTs < 2000) return;
+      lastSchedRefreshTs = now;
+      load();
+    }
     function handleWatchFrame(j) {
       if (!j) return;
+      lastWatchFrameTs = Date.now(); // 任何帧（含 ping）都证明连接活着
+      if (j.t === 'hello') {
+        // 快照前的首帧：sid 变化 = 服务端重建过会话（宿主失效自愈/污染重置）。
+        // seq 是每会话独立编号，旧表会撞号误丢新会话的帧 → 清空按会话去重的表（DOM 保留作视觉历史）
+        if (j.sid) {
+          if (watchSid && watchSid !== j.sid) { renderedSeqs = {}; reasoningSeen = {}; }
+          watchSid = j.sid;
+        }
+        return;
+      }
+      if (j.t === 'ping') return; // 服务端应用层心跳：只刷新 lastWatchFrameTs
+      if (j.t === 'reset') {
+        // 服务端重建了会话并已把本连接改绑到新会话：清状态并立即重连拿新会话快照
+        renderedSeqs = {}; reasoningSeen = {}; watchSid = null;
+        dropLive();
+        setTimeout(openWatch, 300);
+        return;
+      }
       if (j.t === 'message') appendServerMessage(j);
       else if (j.t === 'question') renderQuestionCard(j);
       else if (j.t === 'approval') renderApprovalCard(j);
       else if (j.t === 'resolved') resolveCard(j);
       else if (j.t === 'note') renderNoteCard(j);
       else if (j.t === 'tool') toolCard(j);
-      else if (j.t === 'toolresult') toolResultCard(j);
+      else if (j.t === 'toolresult') { toolResultCard(j); scheduleMaybeChanged(); }
       else if (j.t === 'reasoning') {
         if (j.fresh) {
           // 快照回放：每个步骤的完整思考一个折叠块，按内容去重（兜底轮询会重复推送）
@@ -862,8 +1316,8 @@
       }
       else if (j.t === 'partial') {
         var el = ensureLive();
-        if (j.text) { lastPartialText = j.text; el.textContent = j.text; }
-        else if (lastPartialText) el.textContent = lastPartialText + '\n…（继续处理中）';
+        if (j.text) { lastPartialText = j.text; mdRender(el, j.text); }
+        else if (lastPartialText) mdRender(el, lastPartialText + '\n…（继续处理中）');
         else el.textContent = 'DSH 处理中…';
         el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
@@ -882,9 +1336,10 @@
 
     function openWatch() {
       try { if (watchES) { watchES.close(); watchES = null; } } catch (e) {}
-      try { if (watchWS) { watchWS.onclose = watchWS.onerror = null; watchWS.close(); watchWS = null; } } catch (e) {}
-      // 优先 WebSocket：公网隧道（cloudflared + Cloudflare 边缘）会缓冲 GET SSE 流式响应体，
-      // 手机长时间收不到任何帧；WebSocket 帧不被缓冲，且服务端注入协议层 Ping 心跳保活。
+      // 关旧连接时同时摘掉 onmessage：已排队帧不再派发（新建对话清屏后旧会话帧一帧不留）
+      try { if (watchWS) { watchWS.onclose = watchWS.onerror = watchWS.onmessage = null; watchWS.close(); watchWS = null; } } catch (e) {}
+      // 优先 WebSocket：移动网络中间设备可能缓冲 GET SSE 流式响应体，手机长时间收不到
+      // 任何帧；WebSocket 帧不被缓冲，且服务端注入协议层 Ping 心跳保活。
       // Cookie 随同源 WS 握手自动携带。
       var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       var ws;
@@ -930,6 +1385,19 @@
         // CONNECTING（网络闪断）由 EventSource 自动重连，不处理
       };
     }
+
+    // ---- 连接活性自检（修复"无流式响应、刷新才可见"的另一半根因）----
+    // 服务端每 15/25 秒发应用层 ping。手机休眠/运营商 NAT 静默丢映射时连接双方都
+    // 收不到断开通知：服务端写帧进黑洞、手机端 onclose 永不触发，页面就永远停在
+    // "DSH 处理中…"。前台页面超过 45 秒没收到任何帧 → 判死并主动重连，不等 onclose。
+    function watchZombieHeal() {
+      if (document.hidden) return; // 后台挂起时定时器不跑也不判（回到前台由 visibilitychange 立即判）
+      if (Date.now() - lastWatchFrameTs <= 45000) return;
+      lastWatchFrameTs = Date.now(); // 重置计时防重连风暴（本轮重连后 45 秒内不再触发）
+      openWatch(); // openWatch 会关掉旧连接（含摘除 onmessage）并重开
+    }
+    setInterval(watchZombieHeal, 15000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) watchZombieHeal(); });
     // ---- 交互卡片：回答 DSH 的问题 / 批准工具调用（POST /api/respond 回传宿主） ----
     var liveCards = {}; // rpcId → 卡片元素
     function pinBottom() { var log = $('chatLog'); log.scrollTop = log.scrollHeight; }
@@ -1164,7 +1632,7 @@
       if (!text && !attachments.length) return;
       input.value = '';
       var imgs = attachments.slice();
-      var ub = bubble(text || '（图片）', 'user');
+      var ub = bubble(text || '（图片）', 'user', true);
       ub.setAttribute('data-local', '1'); // 待 watch 流确认后原位采纳
       pendingLocalUser = { text: text, el: ub };
       attachments = [];
@@ -1176,17 +1644,19 @@
       $('chatAttach').disabled = true;
 
       // 发送走流式端点（增量即时反馈）；最终消息与用户气泡由 watch 流统一落地
+      var gen = chatGen; // 本轮发送所属的会话代数（新建对话后旧流帧全部丢弃）
       function handleFrame(line) {
+        if (gen !== chatGen) return;
         if (line.indexOf('data: ') !== 0) return;
         var j = null;
         try { j = JSON.parse(line.slice(6)); } catch (e) { return; }
         if (j.t === 'partial') {
-          if (j.text) { lastPartialText = j.text; live.textContent = j.text; }
-          else if (lastPartialText) live.textContent = lastPartialText + '\n…（继续处理中）';
+          if (j.text) { lastPartialText = j.text; mdRender(live, j.text); }
+          else if (lastPartialText) mdRender(live, lastPartialText + '\n…（继续处理中）');
           live.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         } else if (j.t === 'done') {
           // watch 流会把最终 assistant/message 送来并移除实时气泡；此处仅兜底展示
-          if (live.parentNode) live.textContent = j.reply || live.textContent;
+          if (live.parentNode && j.reply) mdRender(live, j.reply);
           load();
         } else if (j.t === 'error') {
           dropLive();
@@ -1220,9 +1690,11 @@
         }
         return r.text().then(function (all) { all.split('\n\n').forEach(function (f) { handleFrame(f.trim()); }); });
       }).catch(function (err) {
+        if (gen !== chatGen) return; // 会话已重建：旧流失败不写入新对话
         dropLive();
         bubble('发送失败：' + (err.message || err), 'bot');
       }).then(function () {
+        if (gen !== chatGen) return;
         chatBusyUI = false;
         $('chatSend').disabled = false;
         $('chatAttach').disabled = false;

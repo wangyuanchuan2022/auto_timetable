@@ -115,8 +115,9 @@
               <option value="80">超大</option>
             </select>
           </label>
+          <button class="dshell-btn" id="btnNew">＋ 新建</button>
           <button class="dshell-btn dshell-btnGhost" id="btnRefresh">刷新</button>
-          <button class="dshell-btn dshell-btnGhost" id="btnEdit">编辑数据</button>
+          <button class="dshell-btn dshell-btnGhost" id="btnEdit">临时预览</button>
           <button class="dshell-btn" id="btnMobile">手机访问</button>
         </div>
       </div>
@@ -130,34 +131,26 @@
       </div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px">
         <div style="flex:1;min-width:220px;display:flex;gap:12px;align-items:flex-start;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:10px;padding:10px">
-          <canvas id="qrLan" width="10" height="10" style="width:132px;height:132px;flex:none;border-radius:8px;background:#fff"></canvas>
+          <canvas id="qrTunnel" width="10" height="10" style="width:132px;height:132px;flex:none;border-radius:8px;background:#fff"></canvas>
           <div style="min-width:0;flex:1">
-            <div style="font-size:12.5px;font-weight:600">局域网访问</div>
-            <div class="dshell-muted" id="qrLanUrl" style="word-break:break-all;margin-top:4px">获取中…</div>
-            <div class="dshell-muted" id="qrLanState" style="margin-top:4px"></div>
-          </div>
-        </div>
-        <div style="flex:1;min-width:220px;display:flex;gap:12px;align-items:flex-start;border:1px solid var(--dsw-alias-border-l1,#262b36);border-radius:10px;padding:10px">
-          <canvas id="qrWan" width="10" height="10" style="width:132px;height:132px;flex:none;border-radius:8px;background:#fff"></canvas>
-          <div style="min-width:0;flex:1">
-            <div style="font-size:12.5px;font-weight:600">公网访问</div>
-            <div class="dshell-muted" id="qrWanUrl" style="word-break:break-all;margin-top:4px">获取中…</div>
-            <div class="dshell-muted" id="qrWanState" style="margin-top:4px"></div>
+            <div style="font-size:12.5px;font-weight:600">手机访问（Cloudflare 隧道 · HTTPS）</div>
+            <div class="dshell-muted" id="qrTunnelUrl" style="word-break:break-all;margin-top:4px">获取中…</div>
+            <div class="dshell-muted" id="qrTunnelState" style="margin-top:4px"></div>
           </div>
         </div>
       </div>
       <div class="dshell-divider"></div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <button class="dshell-btn dshell-btnGhost" id="btnTunnelToggle" disabled>打开公网隧道</button>
-        <input class="dshell-input" id="pinInput" type="password" placeholder="安全密码（4-64 位，仅保存在本机）" style="width:230px" autocomplete="new-password" />
+        <input class="dshell-input" id="pinInput" type="password" placeholder="安全密码（8-64 位，仅保存在本机）" style="width:230px" autocomplete="new-password" />
         <button class="dshell-btn" id="btnPinSave">保存密码</button>
         <button class="dshell-btn dshell-btnGhost" id="btnPinClear" style="display:none">清除密码</button>
         <span class="dshell-muted" id="adminMsg"></span>
       </div>
       <div class="dshell-muted" style="margin-top:8px">
         本入口由工作区内的 <b>mobile-server.mjs</b> 独立服务提供（默认端口 3190，不占用、不依赖 dsh web 3080 与 dsh-pocket 3081-3090）。
-        手机与电脑连同一局域网时扫「局域网访问」；人在外面扫「公网访问」（点上方按钮开关隧道）。
-        安全密码仅保存在本机 <b>.mobile-srv/settings.json</b>：设置后手机端读写日程需输入该密码；公网隧道必须设置密码后才可开启。
+        功能入口仅 <b>HTTPS 隧道</b>（cloudflared 独立常驻、ingress 指向本机回连端口，经隧道端口的请求按 CF 边缘真实访客 IP 限速、管理接口禁用、Cookie 加 Secure）。
+        <b>明文本机 IP 直连已全量停用</b>（脚注，原独立卡片已删）：任何来源访问直连端口只会看到指向隧道地址的引导页，不承载任何功能。
+        安全密码仅保存在本机 <b>.mobile-srv/settings.json</b>；登录限速（按来源 IP 计数 + 全局慢速闸）、管理接口仅接受本机连接。
         手机页提供：选择日期、查看当日日程、点击日程弹出对话框修改并保存（直接写回 schedule.json）。
       </div>
     </div>
@@ -167,9 +160,9 @@
 
     <div class="dshell-card" id="editPanel" style="display:none">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-        <h2 class="dshell-sub" style="margin:0;font-size:12.5px">数据编辑（临时预览，不写回文件；正式修改请直接编辑 schedule.json）</h2>
+        <h2 class="dshell-sub" style="margin:0;font-size:12.5px">临时预览（不写回文件）</h2>
         <div style="display:flex;gap:8px">
-          <button class="dshell-btn" id="btnApply">应用</button>
+          <button class="dshell-btn" id="btnApply">应用预览</button>
           <button class="dshell-btn dshell-btnGhost" id="btnReset">恢复文件</button>
         </div>
       </div>
@@ -177,9 +170,21 @@
       <div class="dshell-muted" id="editMsg" style="margin-top:4px"></div>
     </div>
 
+    <div class="dshell-card" id="backupPanel" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <h2 class="dshell-sub" style="margin:0;font-size:12.5px">发现未写回的本地备份</h2>
+      </div>
+      <div class="dshell-divider"></div>
+      <div class="dshell-muted">上次保存时服务端写入失败，内容已存为本地备份；当前文件内容与备份<b>不同</b>（期间可能被手机端或 AI 修改过），请选择保留哪一份。</div>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button class="dshell-btn" id="btnUseBackup">使用备份（写回文件）</button>
+        <button class="dshell-btn dshell-btnGhost" id="btnKeepFile">保留文件现值（丢弃备份）</button>
+      </div>
+    </div>
+
     <div class="dshell-card" id="editorPanel" style="display:none">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-        <h2 class="dshell-sub" style="margin:0;font-size:13px">编辑事件（改完点保存，自动写回 schedule.json）</h2>
+        <h2 class="dshell-sub" style="margin:0;font-size:13px" id="edHead">编辑事件（改完点保存，自动写回 schedule.json）</h2>
         <span class="dshell-badge" id="edTypeBadge"></span>
       </div>
       <div class="dshell-divider"></div>
@@ -211,6 +216,7 @@
           </select>
         </label>
         <label class="ed-field" id="ersWrap">重复起始日期<input type="date" class="dshell-input" id="eRStart" /></label>
+        <label class="ed-field">截止日期<input type="date" class="dshell-input" id="eDeadline" title="到该日（含）为止生效；过期即不再显示，数据保留满 3 个月后自动清除；一次性事件留空即事件当日" /></label>
       </div>
       <div class="ed-field" id="edaysWrap" style="margin-top:8px">重复星期（按间隔循环）
         <span class="ed-days" id="eDays"></span>
@@ -322,6 +328,7 @@
     // 事件是否在某天发生
     function occursOn(ev, day) {
       var ds = fmtDate(day);
+      if (ev.deadline && ds > ev.deadline) return false; // 截止日期：到该日（含）为止生效
       var type = ev.type || 'once';
       if (type === 'weekly') return isoWeekday(day) === (ev.weekday || 1);
       if (type === 'once') return ev.date === ds;
@@ -370,21 +377,26 @@
 
     function describeRepeat(ev) {
       var t = ev.type || 'once';
-      if (t === 'weekly') return '每周重复 · 每' + (DAY_FULL[(ev.weekday || 1) - 1] || '周一');
-      if (t === 'once') return '一次性 · ' + (ev.date || '');
-      var r = ev.repeat || {};
-      var unitMap = { day: '天', week: '周', month: '月' };
-      var s = '每 ' + (parseInt(r.interval, 10) || 1) + ' ' + (unitMap[r.unit || 'day'] || '天');
-      if (r.unit === 'week' && Array.isArray(r.days) && r.days.length) {
-        s += '（' + r.days.map(function (d) { return DAY_FULL[(d - 1) % 7]; }).join('/') + '）';
+      var s;
+      if (t === 'weekly') s = '每周重复 · 每' + (DAY_FULL[(ev.weekday || 1) - 1] || '周一');
+      else if (t === 'once') s = '一次性 · ' + (ev.date || '');
+      else {
+        var r = ev.repeat || {};
+        var unitMap = { day: '天', week: '周', month: '月' };
+        s = '每 ' + (parseInt(r.interval, 10) || 1) + ' ' + (unitMap[r.unit || 'day'] || '天');
+        if (r.unit === 'week' && Array.isArray(r.days) && r.days.length) {
+          s += '（' + r.days.map(function (d) { return DAY_FULL[(d - 1) % 7]; }).join('/') + '）';
+        }
+        s += ' · 自 ' + (r.start || '?');
+        if (r.until) s += ' 至 ' + r.until;
       }
-      s += ' · 自 ' + (r.start || '?');
-      if (r.until) s += ' 至 ' + r.until;
+      if (t !== 'once' && ev.deadline) s += ' · 截止 ' + ev.deadline;
       return s;
     }
 
     // ---------- 数据加载 ----------
     function loadData() {
+      lastLoadTs = Date.now(); // 节流基准：加载发起即计时（含手动刷新）
       var qs = new URLSearchParams(location.search);
       var file = qs.get('data') || 'schedule.json';
       var candidates = [file, './' + file, '/api/worktable/site/' + file];
@@ -402,29 +414,47 @@
           finish();
         }).catch(function () { next(); });
       }
-      function finish() {
-        var backup = null;
-        try { backup = localStorage.getItem(BACKUP_KEY); } catch (e) {}
-        if (backup) {
-          try { data = JSON.parse(backup); source = '本地备份（上次未写回文件）'; }
-          catch (err) { backup = null; }
-        }
-        if (!backup) {
-          if (loaded) {
-            data = loaded;
-            source = '已加载 ' + file;
-            var m = data.meta || {};
-            rangeMode = (m.timeStart && m.timeEnd) ? 'meta' : 'auto';
-          } else {
-            data = FALLBACK_DATA;
-            source = '内置示例（未找到 ' + file + '）';
-          }
+      function adoptLoaded() {
+        if (loaded) {
+          data = loaded;
+          source = '已加载 ' + file;
+          var m = data.meta || {};
+          rangeMode = (m.timeStart && m.timeEnd) ? 'meta' : 'auto';
         } else {
+          data = FALLBACK_DATA;
+          source = '内置示例（未找到 ' + file + '）';
+        }
+      }
+      function finish() {
+        lastLoadTs = Date.now();
+        var backup = null, backupData = null;
+        try { backup = localStorage.getItem(BACKUP_KEY); } catch (e) {}
+        if (backup) { try { backupData = JSON.parse(backup); } catch (err) { backupData = null; } }
+        if (backupData && loaded) {
+          // 备份与文件现值都在：相同 → 静默清掉备份；不同 → 弹冲突提示让用户选择，不再自动覆写回存
+          var same = false;
+          try { same = JSON.stringify(backupData) === JSON.stringify(loaded); } catch (e) {}
+          adoptLoaded();
+          if (same) {
+            try { localStorage.removeItem(BACKUP_KEY); } catch (e) {}
+          } else {
+            pendingBackup = backupData;
+            $('backupPanel').style.display = 'block';
+          }
+          render();
+          return;
+        }
+        if (backupData) {
+          // 文件读不到（worktable 不可用）：维持旧行为，用备份渲染并尝试回写
+          data = backupData; source = '本地备份（上次未写回文件）';
           var mm = data.meta || {};
           rangeMode = (mm.timeStart && mm.timeEnd) ? 'meta' : 'auto';
+          render();
+          save();
+          return;
         }
+        adoptLoaded();
         render();
-        if (backup) save(); // 尝试把上次未写回的数据同步到文件
       }
       next();
     }
@@ -529,7 +559,14 @@
     ttSyncTheme();
 
     // ---------- 点击就地编辑 + 持久化 ----------
-    var SAVE_PATH = 'D:\\tools\\auto_timetable\\schedule.json';
+    // 数据文件相对解析：① URL 参数 ?data= 优先（可带路径）；② 默认 schedule.json（相对页面同目录）。
+    // 与 loadData() 的读取候选保持同一来源，写回通道也用它定位文件。
+    var SAVE_PATH = (function () {
+      var q = null;
+      try { q = new URLSearchParams(location.search).get('data'); } catch (e) {}
+      return q || 'schedule.json';
+    })();
+    try { window.TT_SAVE_PATH = SAVE_PATH; } catch (e) {} // 供下方手机面板脚本推导工作目录（跨 IIFE）
     var BACKUP_KEY = 'tt-schedule-backup';
     var loadedUrl = null; // 记录读取成功的数据文件地址，供保存后回读校验
 
@@ -568,6 +605,21 @@
 
     // ---------- 事件编辑器（名称 / 时间 / 重复间隔 / 备注，就地修改并保存） ----------
     var editTarget = null;
+    var isNewEvent = false;   // 新建模式：保存时生成 id 并加入 events（编辑器里是尚未入列的"空事件"）
+    var pendingBackup = null; // 备份冲突待决：用户选择「使用备份」时才写回的备份数据
+    var lastLoadTs = 0;       // 上次数据加载时间：45 秒自动重读的节流基准
+
+    // 新事件 id 生成：evt-<名称简写>-<MMDD>（名称无 ASCII 字母数字时用时间戳兜底），同 id 自动加后缀
+    function genEventId(title) {
+      var slug = String(title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      var d = new Date();
+      var mmdd = String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+      var id = slug ? ('evt-' + slug + '-' + mmdd) : ('evt-' + d.getTime().toString(36));
+      var arr = (data && data.events) || [];
+      var base = id, n = 2;
+      while (arr.some(function (e) { return e.id === id; })) { id = base + '-' + n; n++; }
+      return id;
+    }
 
     function edShow(id, on) { $(id).style.display = on ? '' : 'none'; }
 
@@ -588,13 +640,20 @@
       el.style.color = '#f85149';
     }
 
-    function openEditor(ev) {
+    function openEditor(ev, isNew) {
       editTarget = ev;
+      isNewEvent = !!isNew;
+      detailEl.style.display = 'none'; // 双击事件编辑时收起详情面板，避免两面板叠开
+      $('edHead').textContent = isNewEvent
+        ? '新建事件（保存后自动写回 schedule.json）'
+        : '编辑事件（改完点保存，自动写回 schedule.json）';
+      $('btnDeleteEdit').style.display = isNewEvent ? 'none' : ''; // 新建模式：尚未入列，无删除
       $('eName').value = ev.title || '';
       $('eType').value = ev.type || 'once';
       $('eWeekday').value = String(ev.weekday || 1);
       var today = fmtDate(new Date());
       $('eDate').value = ev.date || today;
+      $('eDeadline').value = ev.deadline || '';
       var r = ev.repeat || {};
       $('eInterval').value = Math.max(1, parseInt(r.interval, 10) || 1);
       $('eUnit').value = r.unit || 'day';
@@ -626,6 +685,7 @@
 
     function closeEditor() {
       editTarget = null;
+      isNewEvent = false;
       $('editorPanel').style.display = 'none';
     }
 
@@ -645,11 +705,13 @@
       } else if (t === 'once') {
         date = $('eDate').value;
         if (!date) { edFail('请选择一次性事件的日期'); return; }
+        if ($('eDeadline').value && $('eDeadline').value < date) { edFail('截止日期不能早于事件日期'); return; }
       } else {
         var interval = Math.max(1, parseInt($('eInterval').value, 10) || 1);
         var unit = $('eUnit').value;
         var rs = $('eRStart').value;
         if (!rs) { edFail('请选择重复起始日期'); return; }
+        if ($('eDeadline').value && $('eDeadline').value < rs) { edFail('截止日期不能早于重复起始日期'); return; }
         rep = { interval: interval, unit: unit, start: rs };
         if (ev.repeat && ev.repeat.until) rep.until = ev.repeat.until; // 保留已有结束日期
         if (unit === 'week') {
@@ -659,6 +721,14 @@
           if (!days.length) { edFail('按周重复时请至少勾选一个星期'); return; }
           rep.days = days;
         }
+      }
+      // 新建模式：生成 id 并加入事件列表（校验已通过，失败不会破坏既有数据）
+      if (isNewEvent) {
+        ev.id = ev.id || genEventId(name);
+        if (!data) data = { events: [] };
+        if (!Array.isArray(data.events)) data.events = [];
+        data.events.push(ev);
+        isNewEvent = false;
       }
       // 校验全部通过后再写回原对象（保证失败时不破坏数据）
       ev.title = name;
@@ -673,6 +743,11 @@
       if (t === 'weekly') { ev.weekday = weekday; delete ev.date; delete ev.repeat; }
       else if (t === 'once') { ev.date = date; delete ev.weekday; delete ev.repeat; }
       else { ev.repeat = rep; delete ev.weekday; delete ev.date; }
+      var dl = $('eDeadline').value;
+      if (t === 'once') ev.deadline = dl || date; // 一次性：留空即事件当日
+      else if (dl) ev.deadline = dl;
+      else if (t === 'custom' && rep && rep.until) ev.deadline = rep.until; // 与重复结束日对齐
+      else delete ev.deadline; // 留空=清除截止日期
       closeEditor();
       render();
       save();
@@ -695,7 +770,10 @@
     };
     $('eName').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveEdit(); } });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && editTarget && $('editorPanel').style.display !== 'none') closeEditor();
+      if (e.key === 'Escape') {
+        if (editTarget && $('editorPanel').style.display !== 'none') closeEditor();
+        else if (detailEl.style.display !== 'none') detailEl.style.display = 'none'; // Esc 关闭详情
+      }
     });
 
     // ---------- 渲染 ----------
@@ -802,6 +880,22 @@
         var cell = div('tt-day' + (isToday(d) ? ' tt-today' : ''));
         cell.style.height = H + 'px';
         cell.style.backgroundSize = '100% ' + (pxPerHour / 2) + 'px, 100% ' + pxPerHour + 'px';
+        // 双击空白网格格：按点击位置时段预填 start（30 分钟对齐，默认 1 小时），以 once 型新建事件
+        cell.ondblclick = (function (dayD, cellRStart, cellPxPerMin, cellEl) {
+          return function (e) {
+            if (e && e.target && e.target.closest && e.target.closest('.tt-ev')) return; // 事件块上的双击交给事件编辑
+            var mins = cellRStart;
+            try {
+              var rect = cellEl.getBoundingClientRect();
+              if (rect && typeof e.clientY === 'number' && cellPxPerMin > 0) {
+                mins = cellRStart + Math.round(((e.clientY - rect.top) / cellPxPerMin) / 30) * 30;
+              }
+            } catch (err) {}
+            mins = Math.max(0, Math.min(1425, mins));
+            var endM = Math.min(1440, mins + 60);
+            openEditor({ type: 'once', date: fmtDate(dayD), start: fmtMin(mins), end: fmtMin(endM) }, true);
+          };
+        })(d, rStart, pxPerMin, cell);
         perDay[idx].list.forEach(function (e) { cell.appendChild(makeEv(e, perDay[idx].lanes, rStart, pxPerMin)); });
         if (isToday(d) && nowMin >= rStart && nowMin <= rEnd) {
           var nl = div('tt-now'); nl.style.top = ((nowMin - rStart) * pxPerMin) + 'px'; cell.appendChild(nl);
@@ -826,13 +920,16 @@
       var dispTitle = ev.title + (ev._cont ? '（次日续）' : '');
       var crossMid = toMin(ev.end) <= toMin(ev.start);
       var timeTxt = crossMid ? (fmtMin(toMin(ev.start)) + ' – 次日 ' + fmtMin(toMin(ev.end))) : (fmtMin(ev._start) + '–' + fmtMin(ev._end));
-      b.title = dispTitle + '\n' + timeTxt + (ev.location ? ' · ' + ev.location : '');
+      b.title = dispTitle + '\n' + timeTxt + (ev.location ? ' · ' + ev.location : '') + (ev.deadline && ev.type !== 'once' ? ' · 截止 ' + ev.deadline : '');
       var t = div('tt-ev-title'); t.textContent = dispTitle; t.style.color = color;
       b.appendChild(t);
       if (h >= 26) { var tm = div('tt-ev-time'); tm.textContent = fmtMin(ev._start) + '–' + fmtMin(ev._end); b.appendChild(tm); }
       if (ev.location && h >= 42) { var l = div('tt-ev-loc'); l.textContent = ev.location; b.appendChild(l); }
-      b.onclick = function () { openEditor(ev._ref || ev); };
-      b.ondblclick = function () { showDetail(ev); };
+      if (ev.deadline && ev.type !== 'once' && h >= 58) { var dlv = div('tt-ev-loc'); dlv.textContent = '⏱ 截止 ' + ev.deadline.slice(5); b.appendChild(dlv); }
+      b.tabIndex = 0; // 可键盘聚焦：Enter 打开详情
+      b.onclick = function () { showDetail(ev); };            // 单击 = 详情
+      b.ondblclick = function () { openEditor(ev._ref || ev); }; // 双击 = 编辑
+      b.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); showDetail(ev); } };
       return b;
     }
 
@@ -895,6 +992,23 @@
     }
 
     // ---------- 事件绑定 ----------
+    // ＋新建：默认 once 型、日期今天（openEditor 内兜底）的空事件，保存时生成 id 入列
+    $('btnNew').onclick = function () { openEditor({ type: 'once' }, true); };
+    // 备份冲突：使用备份（用户明确选择 → 写回） / 保留文件现值（丢弃备份）
+    $('btnUseBackup').onclick = function () {
+      if (!pendingBackup) return;
+      data = pendingBackup; pendingBackup = null;
+      source = '本地备份（已选择写回）';
+      $('backupPanel').style.display = 'none';
+      render();
+      save();
+    };
+    $('btnKeepFile').onclick = function () {
+      pendingBackup = null;
+      try { localStorage.removeItem(BACKUP_KEY); } catch (e) {}
+      $('backupPanel').style.display = 'none';
+      setSaveStatus('已保留文件现值（本地备份已丢弃）', true);
+    };
     $('btnPrev').onclick = function () { cursor = addDays(weekAnchor(cursor), -7); render(); };
     $('btnNext').onclick = function () { cursor = addDays(weekAnchor(cursor), 7); render(); };
     $('btnToday').onclick = function () { cursor = startOfDay(new Date()); render(); };
@@ -927,6 +1041,14 @@
     // ---------- 启动 ----------
     loadData();
     setInterval(render, 60000); // 每分钟刷新当前时间线 / 今天高亮
+    // 每 45 秒自动重读数据（手机端 / AI 改动及时同步；带节流——距上次加载不足 45 秒不重复读）。
+    // 编辑器或备份冲突面板打开期间不自动重载（避免打断输入 / 覆盖用户待决选择）；手动「刷新」不受限。
+    setInterval(function () {
+      if ($('editorPanel').style.display !== 'none') return;
+      if ($('backupPanel').style.display !== 'none') return;
+      if (Date.now() - lastLoadTs < 45000) return;
+      loadData(); // loadData 内部会刷新 lastLoadTs
+    }, 15000);
   })();
   </script>
 
@@ -941,20 +1063,29 @@
     var PORT_CANDIDATES = [3190, 3191, 3192, 3193, 3194, 3195, 3196, 3197, 3198, 3199];
     var foundPort = null;
     var pollTimer = null;
-    var lastLanUrl = null, lastWanUrl = null;
+    var lastTunnelUrl = null;
     var autoStartBusy = false; // 正在自动拉起（防重入）
     var autoStartFails = 0;    // 连续失败计数（≥3 次后停止自动尝试，只提示手动）
 
     // ---- 服务未运行时自动拉起：借用 dsh-worktable 的终端通道执行分离启动命令 ----
     // Start-Process 建立独立 node 进程：页面/终端关闭都不影响服务运行。
+    // 工作目录从数据文件路径推导（?data= 带路径 → 其所在目录；默认 → '.' 即工作台终端当前工作区）；
+    // 终端通道地址从页面自身 origin 推导（嵌入工作台时页面即由 dsh web 托管，端口随宿主走）。
+    function dataWorkDir() {
+      var p = String((window.TT_SAVE_PATH || 'schedule.json'));
+      var i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+      var dir = i > -1 ? p.slice(0, i) : '.';
+      return dir.replace(/\//g, '\\'); // PowerShell 用反斜杠
+    }
     function autoStartServer() {
       if (autoStartBusy || autoStartFails >= 3) return Promise.resolve(false);
       autoStartBusy = true;
-      setState('lan', '服务未运行，正在自动启动 mobile-server.mjs …', true);
+      tState('服务未运行，正在自动启动 mobile-server.mjs …', true);
       var ws = null;
       var p;
       try {
-        ws = new WebSocket('ws://127.0.0.1:3080/api/worktable/term?cwd=' + encodeURIComponent('D:\\tools\\auto_timetable') + '&cols=80&rows=24');
+        var wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(wsProto + '//' + location.host + '/api/worktable/term?cwd=' + encodeURIComponent(dataWorkDir()) + '&cols=80&rows=24');
       } catch (e) {
         p = Promise.resolve(false);
       }
@@ -968,7 +1099,7 @@
           }
           ws.onopen = function () {
             try {
-              ws.send("Start-Process node -ArgumentList 'mobile-server.mjs' -WorkingDirectory 'D:\\tools\\auto_timetable' -WindowStyle Hidden\r");
+              ws.send("Start-Process node -ArgumentList 'mobile-server.mjs' -WorkingDirectory '" + dataWorkDir() + "' -WindowStyle Hidden\r");
             } catch (e) { finish(false); return; }
             setTimeout(function () { finish(true); }, 1200); // 命令送达即算成功
           };
@@ -1023,17 +1154,6 @@
       el.style.color = warn ? '#f85149' : '#3fb950';
     }
 
-    function syncTunnelButton(s) {
-      var btn = $('btnTunnelToggle');
-      var pub = s.public || {};
-      var busy = pub.phase === 'downloading' || pub.phase === 'starting' || pub.phase === 'registering';
-      btn.disabled = busy || !foundPort;
-      if (busy) { btn.textContent = '隧道启动中…'; btn.className = 'dshell-btn dshell-btnGhost'; }
-      else if (pub.running) { btn.textContent = '关闭公网隧道'; btn.className = 'dshell-btn dshell-btnDanger'; }
-      else { btn.textContent = '打开公网隧道'; btn.className = 'dshell-btn'; }
-      $('btnPinClear').style.display = s.pinSet ? '' : 'none';
-    }
-
     function drawQR(canvasId, text) {
       var canvas = $(canvasId);
       if (!canvas || !text || !window.qrgen) return false;
@@ -1063,8 +1183,9 @@
       ctx.fillRect(0, 0, 10, 10);
     }
 
-    function setState(which, text, warn) {
-      var el = $(which === 'lan' ? 'qrLanState' : 'qrWanState');
+    // 状态文案统一落在隧道卡（直连卡已删）：与隧道二维码同区域展示服务状态
+    function tState(text, warn) {
+      var el = $('qrTunnelState');
       el.textContent = text || '';
       el.style.color = warn ? '#d29922' : '';
     }
@@ -1072,58 +1193,38 @@
     function update() {
       serverStatus().then(function (s) {
         autoStartFails = 0; // 服务在线 → 重置自动拉起失败计数
-        // ---- 局域网 ----
-        if (s.lanUrl) {
-          var lanUrl = s.lanUrl.replace(/\/$/, '') + '/';
-          $('qrLanUrl').textContent = lanUrl;
-          if (lanUrl !== lastLanUrl) { lastLanUrl = lanUrl; drawQR('qrLan', lanUrl); }
-          setState('lan', '手机与电脑连同一 WiFi，扫码即开（端口 ' + s.port + '）', false);
+        // ---- Cloudflare 隧道（HTTPS，蜂窝/任意网络可访问，URL 固定） ----
+        var tsEl = $('qrTunnelState');
+        if (s.tunnel && s.tunnel.url) {
+          var tUrl = s.tunnel.url.replace(/\/$/, '') + '/';
+          $('qrTunnelUrl').textContent = tUrl;
+          if (tUrl !== lastTunnelUrl) { lastTunnelUrl = tUrl; drawQR('qrTunnel', tUrl); }
+          tsEl.textContent = '全程 HTTPS，蜂窝网络可用（受安全密码保护）';
+          tsEl.style.color = '';
         } else {
-          $('qrLanUrl').textContent = '未检测到可用局域网 IPv4';
-          setState('lan', '请检查电脑的网络连接', true);
-          clearQR('qrLan');
+          $('qrTunnelUrl').textContent = '未配置';
+          tsEl.textContent = '回连端口 ' + ((s.tunnel && s.tunnel.port) || '—') + ' 已就绪；cloudflared quick tunnel 启动后自动显示（或配置 .mobile-srv/tunnel.json）';
+          tsEl.style.color = '';
+          clearQR('qrTunnel');
         }
-
-        // ---- 公网（独立隧道，面板按钮开关） ----
-        var pub = s.public || {};
-        if (pub.running && pub.url) {
-          var wanUrl = String(pub.url).replace(/\/$/, '') + '/';
-          $('qrWanUrl').textContent = wanUrl;
-          if (wanUrl !== lastWanUrl) { lastWanUrl = wanUrl; drawQR('qrWan', wanUrl); }
-          setState('wan', '人在外面也可访问（受安全密码保护）', false);
-        } else if (pub.phase === 'downloading' || pub.phase === 'starting' || pub.phase === 'registering') {
-          $('qrWanUrl').textContent = '公网隧道启动中…';
-          setState('wan', pub.detail || '', true);
-          clearQR('qrWan');
-        } else {
-          $('qrWanUrl').textContent = '公网隧道未开启';
-          setState('wan', s.pinSet
-            ? (pub.phase === 'error' ? ('隧道异常：' + (pub.detail || '') + '，可关闭后重开') : '点下方按钮开启')
-            : '需先设置安全密码，才能开启公网隧道', true);
-          clearQR('qrWan');
-        }
-        syncTunnelButton(s);
+        $('btnPinClear').style.display = s.pinSet ? '' : 'none';
         panelPinSet = !!s.pinSet;
       }).catch(function () {
         // 服务未运行 → 自动拉起一次，成功后下一轮轮询即显示二维码
-        $('qrLanUrl').textContent = '—';
-        $('qrWanUrl').textContent = '—';
-        $('btnTunnelToggle').disabled = true;
+        $('qrTunnelUrl').textContent = '—';
+        clearQR('qrTunnel');
         autoStartServer().then(function (started) {
           if (started) { update(); return; } // 立即复查（已等待启动延时）
-          var msg = '自动启动失败：请在工作区手动执行 node mobile-server.mjs';
-          setState('lan', msg, true);
-          setState('wan', msg, true);
-          clearQR('qrLan'); clearQR('qrWan');
+          tState('自动启动失败：请在工作区手动执行 node mobile-server.mjs', true);
         });
       });
     }
 
-    // ---- 管理操作：设置 / 清除安全密码、开关公网隧道 ----
+    // ---- 管理操作：设置 / 清除安全密码 ----
     var panelPinSet = false; // 随 /api/status 更新；已设密码时修改/清除需先验旧密码
     $('btnPinSave').onclick = function () {
       var pin = String($('pinInput').value || '');
-      if (pin && !/^\S{6,64}$/.test(pin)) { adminMsg('密码需为 6-64 位、不含空格', true); return; }
+      if (pin && !/^\S{8,64}$/.test(pin)) { adminMsg('密码需为 8-64 位、不含空格', true); return; }
       var payload = { pin: pin };
       if (panelPinSet) {
         var old = window.prompt('已设置过密码，请先输入当前密码：', '');
@@ -1147,24 +1248,11 @@
       }
       adminCall('/api/admin/pin', payload).then(function (r) {
         if (r.json && r.json.ok) {
-          // 清除密码前先关隧道，避免出现无保护公网
-          return adminCall('/api/admin/tunnel', { on: false }).then(function () {
-            adminMsg('安全密码已清除，公网隧道已关闭', false);
-            update();
-          });
+          adminMsg('安全密码已清除', false);
+          update();
+          return;
         }
         adminMsg('清除失败：' + ((r.json && r.json.error) || r.status), true);
-      }).catch(function () { adminMsg('独立服务未运行', true); });
-    };
-    $('btnTunnelToggle').onclick = function () {
-      serverStatus().then(function (s) {
-        var wantOn = !(s.public && s.public.running);
-        if (wantOn && !s.pinSet) { adminMsg('请先设置安全密码，再开启公网隧道', true); return; }
-        adminMsg(wantOn ? '正在开启公网隧道…' : '正在关闭公网隧道…', false);
-        return adminCall('/api/admin/tunnel', { on: wantOn }).then(function (r) {
-          if (r.json && r.json.ok) { adminMsg(wantOn ? '隧道开启指令已发出' : '公网隧道已关闭', false); update(); }
-          else { adminMsg('操作失败：' + ((r.json && r.json.error) || r.status), true); update(); }
-        });
       }).catch(function () { adminMsg('独立服务未运行', true); });
     };
 
