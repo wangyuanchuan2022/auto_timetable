@@ -11,10 +11,12 @@ UI 全部基于 maliang（https://xiaokang2022.github.io/maliang-docs/3.1/）实
 
 功能：
 - 主窗口列出当日日程（按开始时间升序），Windows 11 风格
-- 每条日程开始前 N 分钟（默认 30、10）各 Toast 一次；启动时已过期的提醒点跳过
+- 按事件级 remindLead 提前 Toast（缺失/非法时默认 30、10 双档；0 明确不提醒）；
+  启动时已过期的提醒点跳过
 - Toast：右下角滑入、堆叠、悬停暂停、底部进度条（对齐 Windows 原生通知）
 - 窗口隐藏/关闭后提醒照常触发；全局快捷键（默认 Ctrl+F5）切换主窗口显隐
-- 数据文件每分钟自动重读，支持外部编辑（与网页版共用 schedule.json）
+- 数据文件每分钟自动重读，支持外部编辑（与网页版共用 schedule.json）；
+  领域判定（occurs_on / 提醒档位 / 读取）统一来自仓库根 timetable_core.py 单一实现
 
 --headless：仅运行协议循环（无 GUI），供自动化测试使用。
 """
@@ -30,12 +32,21 @@ import queue
 import sys
 import threading
 import time as _time
-from datetime import datetime, date, time as dtime, timedelta
+from datetime import datetime, date, timedelta
 
 import tkinter as tk
 
 import maliang as ma
 from maliang import theme as ma_theme
+
+# 领域判定单一实现：仓库根目录 timetable_core.py（与独立版 reminder_app.py 共享，禁止双源）。
+# 部署前提：保留仓库根目录与 reminder-plugin/ 的相对目录结构（link: 安装即满足）。
+sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
+try:
+    from timetable_core import occurs_on, lead_minutes, load_day
+except ImportError as _core_err:  # 结构不完整时给出可诊断的退出原因（宿主会记为启动失败）
+    print("timetable helper: timetable_core.py 加载失败：%s" % _core_err, file=sys.stderr)
+    raise SystemExit(1)
 
 PROTOCOL_VERSION = 1
 
@@ -421,75 +432,8 @@ def stdin_thread_main(cmd_q):
     cmd_q.put({"kind": "_eof"})
 
 
-# ---------------- 日程数据（与网页版 schedule.json 同一格式） ----------------
+# ---------------- 日程数据（领域判定见仓库根 timetable_core.py 单一实现） ----------------
 TYPE_LABEL = {"weekly": "每周重复", "once": "一次性", "custom": "自定义间隔"}
-
-
-def parse_hhmm(s, default="08:00"):
-    try:
-        parts = str(s or default).split(":")
-        return dtime(int(parts[0]), int(parts[1] if len(parts) > 1 else 0))
-    except Exception:
-        return dtime(8, 0)
-
-
-def occurs_on(ev, d):
-    """事件是否发生在日期 d。weekday 语义：1=周一..7=周日（与网页版一致）。"""
-    t = ev.get("type", "once")
-    ds = d.isoformat()
-    if t == "weekly":
-        return d.weekday() + 1 == int(ev.get("weekday", 1))
-    if t == "once":
-        return ev.get("date") == ds
-    if t == "custom":
-        r = ev.get("repeat") or {}
-        rs = r.get("start")
-        if not rs or ds < rs:
-            return False
-        if r.get("until") and ds > r["until"]:
-            return False
-        try:
-            sy, sm, sd = (int(x) for x in rs.split("-"))
-            s = date(sy, sm, sd)
-        except Exception:
-            return False
-        diff = (d - s).days
-        if diff < 0:
-            return False
-        interval = max(1, int(r.get("interval", 1) or 1))
-        unit = r.get("unit", "day")
-        if unit == "day":
-            return diff % interval == 0
-        if unit == "week":
-            if (diff // 7) % interval != 0:
-                return False
-            days = r.get("days")
-            if isinstance(days, list) and days:
-                return d.weekday() + 1 in days
-            return d.weekday() == s.weekday()  # 未指定 days：仅起始日的星期几
-        if unit == "month":
-            months = (d.year - s.year) * 12 + (d.month - s.month)
-            return months % interval == 0 and d.day == s.day
-    return False
-
-
-def load_day(data_path, d):
-    """读取数据文件，返回指定日期的事件 [(start_dt, key, ev), ...] 升序。失败返回空表。"""
-    out = []
-    try:
-        with open(data_path, "r", encoding="utf-8-sig") as f:
-            data = json.load(f)
-        for ev in data.get("events", []):
-            if not isinstance(ev, dict) or not ev.get("title"):
-                continue
-            if occurs_on(ev, d):
-                st = datetime.combine(d, parse_hhmm(ev.get("start")))
-                key = ev.get("id") or (str(ev.get("title")) + "|" + str(ev.get("start")))
-                out.append((st, key, ev))
-    except Exception:
-        return []
-    out.sort(key=lambda x: x[0])
-    return out
 
 
 # ---------------- Toast 弹窗（仿 Windows 原生通知，全 maliang 控件） ----------------
@@ -638,6 +582,7 @@ class App:
         self.toasts = []
         self.hotkey_error = None
         self.card_widgets = []   # 当前列表控件（刷新时整体重建）
+        self._last_load_err = None  # 数据文件最近一次读取错误（变化时才打 stderr，防刷屏）
 
         root.title("当日日程提醒")
         win_resize(root, sc(self.WIN_W), sc(self.WIN_H))
@@ -813,11 +758,14 @@ class App:
                 return
             if t.closing or not t.win.winfo_exists():
                 return
-            x = x + max(int((target_x - x) * 0.28), 2)
-            if x <= target_x + 2:
-                t.place(target_x, target_y)
+            delta = target_x - x
+            if abs(delta) <= 2:
+                t.place(target_x, target_y)  # 已到达目标附近：贴齐并结束动画
                 return
-            t.place(x, target_y)
+            step_px = int(delta * 0.28)
+            if -2 < step_px < 2:  # 保证方向正确的最小步长（原实现恒 +2，向右永不收敛）
+                step_px = 2 if delta > 0 else -2
+            t.place(x + step_px, target_y)
             t.win.after(10, step)
 
         t.place(sw + 4, target_y)
@@ -889,9 +837,11 @@ class App:
 
     def check_reminders(self):
         now = datetime.now()
-        leads = self.cfg.get("leadMinutes") or [30, 10]
-        for st, key, ev in load_day(self.cfg.get("dataPath"), now.date()):
-            for off in leads:
+        events, _err = load_day(self.cfg.get("dataPath"), now.date())
+        default_leads = self.cfg.get("leadMinutes")
+        for st, key, ev in events:
+            # 事件级 remindLead（0=不提醒）；缺失/非法回落配置默认档（缺省 30/10）
+            for off in (x for x in lead_minutes(ev, default_leads) if x > 0):
                 point = (key, off)
                 if point in self.fired:
                     continue
@@ -908,9 +858,23 @@ class App:
         self.head_sub.set("%s · 周%s" % (today.strftime("%Y年%m月%d日"),
                                          "一二三四五六日"[today.weekday()]))
         self._clear_list()
-        events = load_day(self.cfg.get("dataPath"), today)
+        events, load_err = load_day(self.cfg.get("dataPath"), today)
+        if load_err and load_err != self._last_load_err:
+            # 数据损坏/不可读：stderr 告警（宿主 helper-process 会记为 warn 日志），且每条只打一次
+            self._last_load_err = load_err
+            print("timetable helper: %s" % load_err, file=sys.stderr)
+        elif not load_err:
+            self._last_load_err = None
         now = datetime.now()
-        if not events:
+        y = sc(4)
+        if load_err:
+            # 醒目告警条：不再静默当作"今日暂无日程"
+            self.card_widgets.append(mlabel(
+                self.list_cv, (0, y), (sc(self.WIN_W) - sc(PAD), zsc(40)),
+                text="⚠ 日程数据文件损坏或不可读（%s）" % os.path.basename(str(self.cfg.get("dataPath"))),
+                fg=C_DANGER, bg=C_BG, size_text=FS_BODY))
+            y += zsc(40) + sc(GAP_S)
+        if not events and not load_err:
             self.card_widgets.append(mlabel(
                 self.list_cv, (0, sc(40)), text="今日暂无日程",
                 fg=C_MUTE, bg=C_BG, size_text=11))
@@ -919,7 +883,6 @@ class App:
             if st > now:
                 next_key = key
                 break
-        y = sc(4)
         for st, key, ev in events:
             y += self._card(y, st, ev, st <= now, key == next_key) + sc(GAP_S)
         try:
@@ -930,9 +893,10 @@ class App:
 
     def next_reminder_text(self, now):
         best = None
-        leads = self.cfg.get("leadMinutes") or [30, 10]
-        for st, key, ev in load_day(self.cfg.get("dataPath"), now.date()):
-            for off in leads:
+        events, _err = load_day(self.cfg.get("dataPath"), now.date())
+        default_leads = self.cfg.get("leadMinutes")
+        for st, key, ev in events:
+            for off in (x for x in lead_minutes(ev, default_leads) if x > 0):
                 rtime = st - timedelta(minutes=off)
                 if rtime > now and (key, off) not in self.fired:
                     if best is None or rtime < best:
@@ -942,7 +906,7 @@ class App:
     def set_sub(self):
         hk = self.cfg.get("hotkey", "ctrl+f5")
         leads = "/".join(str(x) for x in (self.cfg.get("leadMinutes") or [30, 10]))
-        text = "提醒：开始前 %s 分钟各一次 · %s    数据：%s（每分钟自动重读）" % (
+        text = "提醒：按事件 remindLead 提前（缺省 %s 分钟各一次） · %s    数据：%s（每分钟自动重读）" % (
             leads, self.next_reminder_text(datetime.now()),
             os.path.basename(str(self.cfg.get("dataPath"))))
         if self.hotkey_error:

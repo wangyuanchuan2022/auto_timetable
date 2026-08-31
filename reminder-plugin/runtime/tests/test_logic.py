@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""纯逻辑单测：occurs_on / parse_hotkey / parse_hhmm / load_day。"""
+"""纯逻辑单测：occurs_on / parse_hotkey / parse_hhmm / lead_minutes / load_day。
+
+occurs_on / parse_hhmm / lead_minutes / load_day 的单一实现在仓库根
+timetable_core.py（helper.py 与 reminder_app.py 均从其 import，本测试直测核心模块）。
+"""
 import json
 import sys
 import tempfile
@@ -7,9 +11,13 @@ import unittest
 from datetime import date, time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # runtime/（helper）
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))   # 仓库根（timetable_core）
 
-from helper import occurs_on, parse_hotkey, parse_hhmm, load_day, MOD_CONTROL, MOD_ALT, MOD_SHIFT  # noqa: E402
+from helper import parse_hotkey, MOD_CONTROL, MOD_ALT, MOD_SHIFT  # noqa: E402
+from timetable_core import (  # noqa: E402
+    occurs_on, parse_hhmm, lead_minutes, load_day, event_key, DEFAULT_LEADS,
+)
 
 
 class OccursOnTests(unittest.TestCase):
@@ -63,6 +71,35 @@ class OccursOnTests(unittest.TestCase):
         self.assertFalse(occurs_on({"type": "custom", "repeat": {"start": "bad"}}, date(2026, 8, 24)))
         self.assertFalse(occurs_on({"type": "unknown"}, date(2026, 8, 24)))
 
+    def test_deadline_cutoff(self):
+        # deadline 到该日（含）为止生效
+        ev = {"type": "weekly", "weekday": 1, "deadline": "2026-08-24"}
+        self.assertTrue(occurs_on(ev, date(2026, 8, 24)))
+        self.assertFalse(occurs_on(ev, date(2026, 8, 31)))
+
+
+class LeadMinutesTests(unittest.TestCase):
+    """事件级 remindLead 档位（与 mobile-server / mobile.html 的 leadOf 语义对齐）。"""
+
+    def test_explicit_zero_means_no_reminder(self):
+        # 回归：0 = 明确不提醒 → 单档 [0]，调用方按 >0 过滤后为空（不得回落默认双档）
+        self.assertEqual(lead_minutes({"remindLead": 0}), [0.0])
+
+    def test_explicit_positive_single_lead(self):
+        self.assertEqual(lead_minutes({"remindLead": 5}), [5.0])
+        self.assertEqual(lead_minutes({"remindLead": "15"}), [15.0])  # 数字字符串同服务端 parseFloat
+
+    def test_missing_or_invalid_falls_back_to_default(self):
+        self.assertEqual(lead_minutes({}), list(DEFAULT_LEADS))
+        self.assertEqual(lead_minutes({"remindLead": "abc"}), list(DEFAULT_LEADS))
+        self.assertEqual(lead_minutes({"remindLead": -3}), list(DEFAULT_LEADS))
+        self.assertEqual(lead_minutes({"remindLead": True}), list(DEFAULT_LEADS))  # bool 不当数字
+
+    def test_default_override(self):
+        # helper.py 的可配置默认档（config leadMinutes）作为回落值
+        self.assertEqual(lead_minutes({}, [15]), [15.0])
+        self.assertEqual(lead_minutes({"remindLead": 7}, [30, 10]), [7.0])  # 事件级优先
+
 
 class HotkeyTests(unittest.TestCase):
     def test_valid(self):
@@ -90,34 +127,76 @@ class ParseTimeTests(unittest.TestCase):
 
 
 class LoadDayTests(unittest.TestCase):
-    def _write(self, events):
+    def _write(self, text):
         f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
-        json.dump({"events": events}, f, ensure_ascii=False)
+        f.write(text)
         f.close()
         self.addCleanup(Path(f.name).unlink)
         return f.name
 
+    def _write_events(self, events):
+        return self._write(json.dumps({"events": events}, ensure_ascii=False))
+
     def test_filter_sort_and_fields(self):
-        path = self._write([
+        path = self._write_events([
             {"id": "b", "title": "下午事", "type": "once", "date": "2026-08-27", "start": "15:00"},
             {"id": "a", "title": "上午事", "type": "once", "date": "2026-08-27", "start": "08:30"},
             {"id": "c", "title": "别的天", "type": "once", "date": "2026-08-28", "start": "09:00"},
-            {"id": "d", "title": "无标题丢弃", "type": "once", "date": "2026-08-27", "start": "10:00", "title": ""},
+            {"id": "d", "title": "", "type": "once", "date": "2026-08-27", "start": "10:00"},
         ])
-        out = load_day(path, date(2026, 8, 27))
-        self.assertEqual([k for _, k, _ in out], ["a", "b"])
+        out, err = load_day(path, date(2026, 8, 27))
+        self.assertIsNone(err)
+        # 键格式：id|日期|start（对齐服务端 mobile-server.mjs 的 fired key）
+        self.assertEqual([k for _, k, _ in out], ["a|2026-08-27|08:30", "b|2026-08-27|15:00"])
         self.assertEqual(out[0][0].hour, 8)
         self.assertEqual(out[0][0].minute, 30)
 
     def test_empty_day_and_bad_file(self):
-        path = self._write([{"id": "x", "title": "t", "type": "once", "date": "2026-08-26", "start": "09:00"}])
-        self.assertEqual(load_day(path, date(2026, 8, 27)), [])  # 当日无日程 → 空表
-        self.assertEqual(load_day("Z:/not/exist.json", date(2026, 8, 27)), [])  # 坏文件 → 空表不抛错
+        path = self._write_events([{"id": "x", "title": "t", "type": "once", "date": "2026-08-26", "start": "09:00"}])
+        out, err = load_day(path, date(2026, 8, 27))
+        self.assertEqual(out, [])  # 当日无日程 → 空表
+        self.assertIsNone(err)     # 但不是错误
+        out2, err2 = load_day("Z:/not/exist.json", date(2026, 8, 27))
+        self.assertEqual(out2, [])  # 坏文件 → 空表不抛错
+        self.assertTrue(err2)       # 且返回错误消息（供 UI 显示损坏告警）
 
     def test_missing_id_fallback_key(self):
-        path = self._write([{"title": "无ID", "type": "once", "date": "2026-08-27", "start": "09:00"}])
-        out = load_day(path, date(2026, 8, 27))
-        self.assertEqual(out[0][1], "无ID|09:00")
+        path = self._write_events([{"title": "无ID", "type": "once", "date": "2026-08-27", "start": "09:00"}])
+        out, err = load_day(path, date(2026, 8, 27))
+        self.assertIsNone(err)
+        self.assertEqual(out[0][1], "无ID|2026-08-27|09:00")
+
+    def test_corrupt_json_and_bad_structure_report_error(self):
+        corrupt = self._write('{"events": [')  # JSON 截断
+        _, err = load_day(corrupt, date(2026, 8, 27))
+        self.assertIn("损坏", err)
+        notobj = self._write('[1, 2]')  # 顶层非对象
+        _, err2 = load_day(notobj, date(2026, 8, 27))
+        self.assertTrue(err2)
+        badevents = self._write('{"events": {"a": 1}}')  # events 非数组
+        _, err3 = load_day(badevents, date(2026, 8, 27))
+        self.assertTrue(err3)
+
+    def test_key_changes_on_reschedule(self):
+        # 回归：改期（start 变）后键变化 → 已触发记录不再误伤新时间点（改期重弹生效）
+        d = date(2026, 8, 27)
+        k1 = event_key({"id": "e1", "title": "课", "start": "08:00"}, d)
+        k2 = event_key({"id": "e1", "title": "课", "start": "10:00"}, d)
+        self.assertNotEqual(k1, k2)
+        # 跨日也换键（日期入键）
+        self.assertNotEqual(
+            event_key({"id": "e1", "title": "课", "start": "08:00"}, d),
+            event_key({"id": "e1", "title": "课", "start": "08:00"}, date(2026, 8, 28)))
+
+    def test_single_bad_event_skipped_not_fatal(self):
+        # 单条事件字段非法（weekday 非数字）→ 仅跳过该条，其余照常且不报 err
+        path = self._write_events([
+            {"id": "bad", "title": "坏数据", "type": "weekly", "weekday": "x", "start": "08:00"},
+            {"id": "ok", "title": "正常", "type": "once", "date": "2026-08-27", "start": "09:00"},
+        ])
+        out, err = load_day(path, date(2026, 8, 27))
+        self.assertIsNone(err)
+        self.assertEqual([k for _, k, _ in out], ["ok|2026-08-27|09:00"])
 
 
 if __name__ == "__main__":

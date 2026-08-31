@@ -2,24 +2,27 @@
 """
 当日日程提醒 · 桌面应用
 - 主窗口：列出当日日程（按开始时间升序），显示开始时间与标题（含地点/类型）
-- 提醒：每条日程开始前 30 分钟、10 分钟各弹窗一次；过期时间点自动跳过；每点仅触发一次
+- 提醒：按事件级 remindLead 提前弹窗（缺失/非法时默认开始前 30、10 分钟各一次；
+  remindLead=0 明确不提醒）；过期时间点自动跳过；每点仅触发一次
 - 后台常驻：主窗口隐藏/关闭后提醒照常触发
 - 全局快捷键 Ctrl+F5：任意应用前台时可用，切换主窗口显示/隐藏
-- 数据：与本目录网页版时间表共用 schedule.json（支持每周重复/一次性/自定义间隔）
+- 数据：与本目录网页版时间表共用 schedule.json（支持每周重复/一次性/自定义间隔）；
+  领域判定（occurs_on / 提醒档位 / 读取）统一来自根目录 timetable_core.py 单一实现
 
 启动：python reminder_app.py   （或双击 start_reminder.bat）
 退出：主窗口内点「退出」按钮（关闭窗口 = 隐藏，进程继续提醒）
 """
-import json
 import os
 import sys
 import queue
 import threading
 import ctypes
 import ctypes.wintypes as wintypes
-from datetime import datetime, date, time as dtime, timedelta
+from datetime import datetime, date, timedelta
 import tkinter as tk
 from tkinter import font as tkfont
+
+from timetable_core import lead_minutes, load_day
 
 # ---------------- Win32 全局快捷键 ----------------
 MOD_CONTROL = 0x0002
@@ -47,76 +50,8 @@ def hotkey_thread(msg_q: queue.Queue):
         user32.UnregisterHotKey(None, HOTKEY_ID)
 
 
-# ---------------- 日程数据（与网页版 schedule.json 同一格式） ----------------
+# ---------------- 日程数据（领域判定见 timetable_core.py 单一实现） ----------------
 TYPE_LABEL = {"weekly": "每周重复", "once": "一次性", "custom": "自定义间隔"}
-
-
-def parse_hhmm(s, default="08:00"):
-    try:
-        parts = str(s or default).split(":")
-        return dtime(int(parts[0]), int(parts[1] if len(parts) > 1 else 0))
-    except Exception:
-        return dtime(8, 0)
-
-
-def occurs_on(ev, d: date) -> bool:
-    """事件是否发生在日期 d（weekly: 周几 1=周一..7=周日；once: 具体日期；custom: 间隔规则）。"""
-    t = ev.get("type", "once")
-    ds = d.isoformat()
-    if t == "weekly":
-        return d.weekday() + 1 == int(ev.get("weekday", 1))
-    if t == "once":
-        return ev.get("date") == ds
-    if t == "custom":
-        r = ev.get("repeat") or {}
-        rs = r.get("start")
-        if not rs or ds < rs:
-            return False
-        if r.get("until") and ds > r["until"]:
-            return False
-        try:
-            sy, sm, sd = (int(x) for x in rs.split("-"))
-            s = date(sy, sm, sd)
-        except Exception:
-            return False
-        diff = (d - s).days
-        if diff < 0:
-            return False
-        interval = max(1, int(r.get("interval", 1) or 1))
-        unit = r.get("unit", "day")
-        if unit == "day":
-            return diff % interval == 0
-        if unit == "week":
-            if (diff // 7) % interval != 0:
-                return False
-            days = r.get("days")
-            if isinstance(days, list) and days:
-                return d.weekday() + 1 in days
-            return d.weekday() + 1 == s.weekday() + 1
-        if unit == "month":
-            months = (d.year - s.year) * 12 + (d.month - s.month)
-            return months % interval == 0 and d.day == s.day
-    return False
-
-
-def load_today(data_path):
-    """读取数据文件，返回当日事件列表 [(start_dt, key, ev), ...]，按开始时间升序。读取失败返回空表。"""
-    today = date.today()
-    out = []
-    try:
-        with open(data_path, "r", encoding="utf-8-sig") as f:
-            data = json.load(f)
-        for ev in data.get("events", []):
-            if not isinstance(ev, dict) or not ev.get("title"):
-                continue
-            if occurs_on(ev, today):
-                st = datetime.combine(today, parse_hhmm(ev.get("start")))
-                key = ev.get("id") or (str(ev.get("title")) + "|" + str(ev.get("start")))
-                out.append((st, key, ev))
-    except Exception:
-        return []
-    out.sort(key=lambda x: x[0])
-    return out
 
 
 # ---------------- 主应用 ----------------
@@ -151,7 +86,8 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self.hide)  # 关闭 = 隐藏，进程常驻继续提醒
 
         self.after_setup()
-        threading.Thread(target=hotkey_thread, args=(self.msg_q,), daemon=True).start()
+        self.hotkey_thread = threading.Thread(target=hotkey_thread, args=(self.msg_q,), daemon=True)
+        self.hotkey_thread.start()
         self.refresh(True)
 
     # ---- 计时 ----
@@ -184,8 +120,9 @@ class App:
     # ---- 提醒 ----
     def check_reminders(self):
         now = datetime.now()
-        for st, key, ev in load_today(self.data_path):
-            for off in (30, 10):
+        events, _err = load_day(self.data_path, now.date())
+        for st, key, ev in events:
+            for off in (x for x in lead_minutes(ev) if x > 0):  # 事件级 remindLead；0=不提醒
                 point = (key, off)
                 if point in self.fired:
                     continue
@@ -227,8 +164,14 @@ class App:
         self.head.config(text="今日日程 · %s（周%s）" % (today.strftime("%Y-%m-%d"), "一二三四五六日"[today.weekday()]))
         for w in self.list_wrap.winfo_children():
             w.destroy()
-        events = load_today(self.data_path)
-        if not events:
+        events, load_err = load_day(self.data_path, today)
+        if load_err:
+            # 数据损坏/不可读：醒目告警，不再静默当作"今日暂无日程"
+            tk.Label(self.list_wrap, fg="#c00", justify="left", wraplength=380,
+                     text="⚠ 日程数据文件损坏或不可读（%s）\n%s" % (os.path.basename(self.data_path), load_err)
+                     ).pack(pady=(8, 0))
+            print("reminder_app: %s" % load_err, file=sys.stderr)
+        if not events and not load_err:
             tk.Label(self.list_wrap, text="今日暂无日程", fg="#999").pack(pady=30)
         now = datetime.now()
         for st, key, ev in events:
@@ -244,12 +187,12 @@ class App:
             txt += "  [%s]" % TYPE_LABEL.get(ev.get("type", "once"), ev.get("type"))
             tk.Label(row, text=txt, anchor="w", fg=color).pack(side="left", fill="x", expand=True)
         nxt = self.next_reminder_text(events, now)
-        self.set_sub("提醒：开始前 30/10 分钟各一次 · " + nxt + "\n数据：%s（每分钟自动重读，可外部编辑）\nCtrl+F5 显示/隐藏 · 关闭窗口仅隐藏，退出请点「退出程序」" % os.path.basename(self.data_path))
+        self.set_sub("提醒：按事件 remindLead 提前（缺省 30/10 分钟各一次） · " + nxt + "\n数据：%s（每分钟自动重读，可外部编辑）\nCtrl+F5 显示/隐藏 · 关闭窗口仅隐藏，退出请点「退出程序」" % os.path.basename(self.data_path))
 
     def next_reminder_text(self, events, now):
         best = None
         for st, key, ev in events:
-            for off in (30, 10):
+            for off in (x for x in lead_minutes(ev) if x > 0):
                 rtime = st - timedelta(minutes=off)
                 if rtime > now and (key, off) not in self.fired:
                     if best is None or rtime < best:
@@ -290,8 +233,11 @@ class App:
 
     def quit(self):
         try:
-            ctypes.windll.user32.PostThreadMessageW(
-                ctypes.windll.kernel32.GetCurrentThreadId(), 0x0012, 0, 0)  # 通知热键线程退出（尽力而为）
+            # 通知热键线程退出：向该线程自身的 ident 投递 WM_QUIT
+            # （此前误用 GetCurrentThreadId()——在主线程调用只会发回主线程自己）
+            ident = getattr(self.hotkey_thread, "ident", None)
+            if ident:
+                ctypes.windll.user32.PostThreadMessageW(ident, 0x0012, 0, 0)
         except Exception:
             pass
         self.root.destroy()
