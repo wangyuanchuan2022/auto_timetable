@@ -1,59 +1,32 @@
-// 提醒判定逻辑回环测试：从 mobile.html 提取 leadOf/evKey/reminderCandidates 原样执行
+// 提醒判定逻辑回环测试：leadOf/evKey/reminderCandidates 从 mobile.html 原样提取执行；
+// 领域判定（occursOn/leadMinutes 底层）走共享模块 occur.js 单一实现——测试不再自带 occursOn 拷贝
+// （历史教训：本文件曾内嵌一份漏了 deadline 截止判定的过期拷贝，与页面行为漂移）。
 const fs = require('fs');
+const TTOccur = require('../occur.js');
 const src = fs.readFileSync('mobile.html', 'utf8');
 const start = src.indexOf('function leadOf');
 const end = src.indexOf('function showReminder');
 if (start < 0 || end < 0) { console.log('EXTRACT FAILED'); process.exit(1); }
 const block = src.slice(start, end);
 
-function pad(n) { return String(n).padStart(2, '0'); }
-function fmtDate(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
-function toMin(hhmm) { var p = String(hhmm || '0:0').split(':'); return (+p[0]) * 60 + (+p[1] || 0); }
-function isoWeekday(d) { return (d.getDay() + 6) % 7 + 1; }
-function parseDate(s) { var p = String(s).split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
-function occursOn(ev, day) {
-  var ds = fmtDate(day);
-  var type = ev.type || 'once';
-  if (type === 'weekly') return isoWeekday(day) === (ev.weekday || 1);
-  if (type === 'once') return ev.date === ds;
-  if (type === 'custom') {
-    var r = ev.repeat || {};
-    if (!r.start) return false;
-    if (ds < r.start) return false;
-    if (r.until && ds > r.until) return false;
-    var s = parseDate(r.start);
-    var diffDays = Math.round((day - s) / 86400000);
-    if (diffDays < 0) return false;
-    var interval = Math.max(1, parseInt(r.interval, 10) || 1);
-    var unit = r.unit || 'day';
-    if (unit === 'day') return diffDays % interval === 0;
-    if (unit === 'week') {
-      var weekDiff = Math.floor(diffDays / 7);
-      if (weekDiff % interval !== 0) return false;
-      if (Array.isArray(r.days) && r.days.length) return r.days.indexOf(isoWeekday(day)) !== -1;
-      return isoWeekday(day) === isoWeekday(s);
-    }
-    if (unit === 'month') {
-      var months = (day.getFullYear() - s.getFullYear()) * 12 + (day.getMonth() - s.getMonth());
-      if (months % interval !== 0) return false;
-      return day.getDate() === s.getDate();
-    }
-  }
-  return false;
-}
+const fmtDate = TTOccur.fmtDate;
+const toMin = TTOccur.parseHHMM;
+const isoWeekday = TTOccur.isoWeekday;
+const occursOn = TTOccur.occursOn;
+
 const store = {};
 const localStorage = {
   getItem: (k) => (k in store ? store[k] : null),
   setItem: (k, v) => { store[k] = String(v); },
 };
 
-const ctx = { data: null, REMIND_OVERRIDE: null, REMIND_DEFAULT: 20, localStorage, fmtDate, toMin, occursOn, parseFloat, isFinite, Date, JSON };
+const ctx = { data: null, REMIND_OVERRIDE: null, REMIND_DEFAULT: 20, localStorage, fmtDate, toMin, occursOn, TTOccur, parseFloat, isFinite, Date, JSON };
 const fn = new Function(...Object.keys(ctx), block + '\nreturn { leadOf, evKey, reminderCandidates };');
 // 参数按值拷贝：每次调用重新绑定最新的 ctx 状态
 function api() { return fn(...Object.values(ctx)); }
 
 const now = new Date();
-const hm = (offsetMin) => { const d = new Date(now.getTime() + offsetMin * 60000); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+const hm = (offsetMin) => { const d = new Date(now.getTime() + offsetMin * 60000); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
 const ds = fmtDate(now);
 let pass = 0, fail = 0;
 function t(name, got, want) {
@@ -108,6 +81,15 @@ t('weekly other-day no fire', cand().length, 0);
 // 8. 已开始的事件（打开页面晚了）不弹
 ctx.data = { events: [{ id: 'h', type: 'once', date: ds, start: hm(-30), end: hm(20) }] };
 t('already started no fire', cand().length, 0);
+
+// 9. deadline 已过期（昨天截止）→ 即使 weekly 命中今天也不提醒（共享模块 occursOn 判定，防副本漂移回归）
+const yesterday = fmtDate(new Date(now.getTime() - 864e5));
+ctx.data = { events: [{ id: 'i', title: 'I过期课', type: 'weekly', weekday: isoWeekday(now), start: hm(3), end: hm(4), deadline: yesterday }] };
+t('deadline expired no fire', cand().length, 0);
+
+// 10. deadline 当天（含当日截止）→ 仍提醒
+ctx.data = { events: [{ id: 'j', title: 'J今日截止', type: 'weekly', weekday: isoWeekday(now), start: hm(3), end: hm(4), deadline: ds }] };
+t('deadline today still fires', cand().length, 1);
 
 store['tt-remind-state'] = JSON.stringify({ fired: {}, snooze: {} });
 

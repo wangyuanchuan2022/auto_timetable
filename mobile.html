@@ -193,6 +193,8 @@
     </div>
   </div>
 
+  <!-- 共享领域判定核心（单一实现，与服务端 / 桌面端 / Python timetable_core.py 同语义） -->
+  <script src="/occur.js"></script>
   <script>
   (function () {
     'use strict';
@@ -304,37 +306,8 @@
     function isoWeekday(d) { return (d.getDay() + 6) % 7 + 1; }
     var DAY_FULL = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
-    function occursOn(ev, day) {
-      var ds = fmtDate(day);
-      if (ev.deadline && ds > ev.deadline) return false; // 截止日期：到该日（含）为止生效
-      var type = ev.type || 'once';
-      if (type === 'weekly') return isoWeekday(day) === (ev.weekday || 1);
-      if (type === 'once') return ev.date === ds;
-      if (type === 'custom') {
-        var r = ev.repeat || {};
-        if (!r.start) return false;
-        if (ds < r.start) return false;
-        if (r.until && ds > r.until) return false;
-        var s = parseDate(r.start);
-        var diffDays = Math.round((day - s) / 86400000);
-        if (diffDays < 0) return false;
-        var interval = Math.max(1, parseInt(r.interval, 10) || 1);
-        var unit = r.unit || 'day';
-        if (unit === 'day') return diffDays % interval === 0;
-        if (unit === 'week') {
-          var weekDiff = Math.floor(diffDays / 7);
-          if (weekDiff % interval !== 0) return false;
-          if (Array.isArray(r.days) && r.days.length) return r.days.indexOf(isoWeekday(day)) !== -1;
-          return isoWeekday(day) === isoWeekday(s);
-        }
-        if (unit === 'month') {
-          var months = (day.getFullYear() - s.getFullYear()) * 12 + (day.getMonth() - s.getMonth());
-          if (months % interval !== 0) return false;
-          return day.getDate() === s.getDate();
-        }
-      }
-      return false;
-    }
+    // 领域判定单一实现：共享模块 occur.js（全局 TTOccur；与服务端 / 桌面端 / Python 同语义）
+    var occursOn = TTOccur.occursOn;
 
     function describeRepeat(ev) {
       var t = ev.type || 'once';
@@ -527,6 +500,15 @@
         if (!title) { msgEl.textContent = '名称不能为空'; msgEl.classList.add('err'); return; }
         if (!start || !end) { msgEl.textContent = '请填写开始与结束时间'; msgEl.classList.add('err'); return; }
         if (toMin(end) === toMin(start)) { msgEl.textContent = '结束时间不能等于开始时间'; msgEl.classList.add('err'); return; }
+        // P1-2 结构校验（共享模块）：拦截日期/截止等格式错误，含未编辑字段的整体一致性
+        var cand = {
+          type: editEv.type || 'once',
+          title: title, start: start, end: end,
+          date: editEv.date, weekday: editEv.weekday, repeat: editEv.repeat,
+          deadline: $('dDeadline').value || undefined,
+        };
+        var errs = TTOccur.validateEvent(cand);
+        if (errs.length) { msgEl.textContent = '无法保存：' + errs.join('；'); msgEl.classList.add('err'); return; }
 
         // 先改内存对象，写盘成功后关闭
         editEv.title = title;
@@ -576,8 +558,7 @@
     } catch (e) {}
     function leadOf(ev) {
       if (REMIND_OVERRIDE !== null) return REMIND_OVERRIDE;
-      var v = parseFloat(ev.remindLead);
-      return (isFinite(v) && v >= 0) ? v : REMIND_DEFAULT;
+      return TTOccur.leadMinutes(ev, REMIND_DEFAULT); // 共享模块：>=0 原值（0=不提醒），缺失/非法回落默认
     }
     var REMIND_STORE = 'tt-remind-state'; // { fired: {key: ts}, snooze: {key: ts} }
     var remindOpen = null; // 当前弹窗对应的 key（弹窗期间不再弹新窗）

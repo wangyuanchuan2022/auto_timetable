@@ -62,8 +62,14 @@ export function makeTextNode(t) {
 
 export function loadPage(pagePath) {
   const html = readFileSync(pagePath, 'utf8');
+  // 页面首个无属性 <script> 为内联脚本；<script src="/occur.js">（带属性）不匹配该正则。
   const m = html.match(/<script>([\s\S]*)<\/script>/);
   if (!m) throw new Error('未找到 <script> 块: ' + pagePath);
+
+  // 共享领域模块 occur.js 先于页面脚本加载（与浏览器 <script src> 同路径；
+  // UMD 包装在沙箱全局挂 TTOccur——页面内联脚本以裸引用 TTOccur 使用，绝不在页面里留副本）
+  let occurSrc = '';
+  try { occurSrc = readFileSync(new URL('../occur.js', import.meta.url), 'utf8'); } catch (e) {}
 
   const ids = ['datePick', 'list', 'notifyBtn', 'notifyState', 'chatLog', 'chatThumbs', 'chatIn', 'chatAttach', 'chatSend', 'chatFile', 'modelBtn', 'newChatBtn', 'dDel', 'pIn', 'pOk', 'pCancel', 'pMsg'];
   const byId = {}; ids.forEach(id => { byId[id] = makeEl('div'); });
@@ -103,6 +109,7 @@ export function loadPage(pagePath) {
     },
   };
   vm.createContext(sandbox);
+  if (occurSrc) vm.runInContext(occurSrc, sandbox, { timeout: 10000 }); // 先挂全局 TTOccur
   vm.runInContext(m[1], sandbox, { timeout: 10000 });
   return {
     byId,

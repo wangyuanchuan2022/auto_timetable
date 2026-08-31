@@ -24,11 +24,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { withSetup, stripSetup } from './chat-setup.mjs';
+import TTOccur from './occur.js'; // 共享领域判定核心（与网页端 / Python timetable_core.py 同一语义）
 
 const require = createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEDULE_PATH = join(HERE, 'schedule.json');
 const MOBILE_HTML_PATH = join(HERE, 'mobile.html');
+const OCCUR_JS_PATH = join(HERE, 'occur.js'); // 手机页 <script src="/occur.js"> 的静态托管来源
 const BIN_CACHE_DIR = join(HERE, '.mobile-srv');
 const SETTINGS_PATH = join(BIN_CACHE_DIR, 'settings.json'); // 安全密码仅存本机此文件
 const SUBS_PATH = join(BIN_CACHE_DIR, 'push-subscriptions.json'); // Web Push 订阅（每设备一条）
@@ -720,42 +722,10 @@ async function pushToAll(payloadObj) {
   return allHandled;
 }
 
-// —— 服务端事件判定（与手机端同规则：weekly / once / custom；本地墙上时间） ——
-function srvIsoWeekday(d) { return (d.getDay() + 6) % 7 + 1; }
-function srvFmtDate(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
-function srvToMin(hhmm) { const p = String(hhmm || '0:0').split(':'); return (+p[0]) * 60 + (+p[1] || 0); }
-function srvFmtMin(m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
-function srvParseDate(s) { const p = String(s).split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
-function srvOccursOn(ev, day) {
-  const ds = srvFmtDate(day);
-  if (ev.deadline && ds > ev.deadline) return false; // 截止日期：到该日（含）为止生效
-  const type = ev.type || 'once';
-  if (type === 'weekly') return srvIsoWeekday(day) === (ev.weekday || 1);
-  if (type === 'once') return ev.date === ds;
-  if (type === 'custom') {
-    const r = ev.repeat || {};
-    if (!r.start || ds < r.start) return false;
-    if (r.until && ds > r.until) return false;
-    const s = srvParseDate(r.start);
-    const diffDays = Math.round((day - s) / 86400000);
-    if (diffDays < 0) return false;
-    const interval = Math.max(1, parseInt(r.interval, 10) || 1);
-    const unit = r.unit || 'day';
-    if (unit === 'day') return diffDays % interval === 0;
-    if (unit === 'week') {
-      const weekDiff = Math.floor(diffDays / 7);
-      if (weekDiff % interval !== 0) return false;
-      if (Array.isArray(r.days) && r.days.length) return r.days.indexOf(srvIsoWeekday(day)) !== -1;
-      return srvIsoWeekday(day) === srvIsoWeekday(s);
-    }
-    if (unit === 'month') {
-      const months = (day.getFullYear() - s.getFullYear()) * 12 + (day.getMonth() - s.getMonth());
-      if (months % interval !== 0) return false;
-      return day.getDate() === s.getDate();
-    }
-  }
-  return false;
-}
+// —— 服务端事件判定：统一走共享领域模块 occur.js（单一实现；与手机端/桌面端/Python 同语义） ——
+const srvFmtDate = TTOccur.fmtDate;
+const srvToMin = TTOccur.parseHHMM;
+const srvOccursOn = TTOccur.occursOn;
 
 async function loadFired() { try { return JSON.parse(await readFile(FIRED_PATH, 'utf8')); } catch { return {}; } }
 async function saveFired(m) {
@@ -819,8 +789,7 @@ function startReminderScheduler() {
       for (const ev of (data.events ?? [])) {
         for (const day of [now, new Date(now.getTime() + 864e5)]) {
           if (!srvOccursOn(ev, day)) continue;
-          const leadRaw = parseFloat(ev.remindLead);
-          const lead = Number.isFinite(leadRaw) && leadRaw >= 0 ? leadRaw : 20; // 显式 0 = 不提醒；非法/缺失才默认 20
+          const lead = TTOccur.leadMinutes(ev); // 显式 0 = 不提醒；非法/缺失才默认 20
           if (!(lead > 0)) continue;
           const s = srvToMin(ev.start), e = srvToMin(ev.end);
           if (e <= s) continue;
@@ -1359,7 +1328,12 @@ async function createServer(port, viaTunnel = false) {
         if (next.length !== subs.length) await saveSubs(next);
         return sendJSON(res, 200, { ok: true });
       }
-      // ---- PWA 静态资源：Service Worker / manifest / 图标 ----
+      // ---- PWA 静态资源：Service Worker / manifest / 图标 / 共享领域模块 ----
+      if (req.method === 'GET' && pathname === '/occur.js') {
+        const js = await readFile(OCCUR_JS_PATH, 'utf8').catch(() => '');
+        if (!js) return sendJSON(res, 404, { ok: false, error: 'occur.js missing' });
+        return send(res, 200, js, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      }
       if (req.method === 'GET' && pathname === '/sw.js') {
         const js = await readFile(join(HERE, 'sw.js'), 'utf8').catch(() => '');
         if (!js) return sendJSON(res, 404, { ok: false, error: 'sw.js missing' });
@@ -1537,6 +1511,11 @@ async function createServer(port, viaTunnel = false) {
         const parsed = JSON.parse(body.content); // 必须是合法 JSON 才写盘
         if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.events)) {
           return sendJSON(res, 400, { ok: false, error: 'invalid schedule' });
+        }
+        // P1-2 逐事件结构校验：存在结构性错误（如 custom 缺 repeat、日期格式非法）→ 400 返回明细，不写盘
+        const problems = TTOccur.validateSchedule(parsed);
+        if (problems.length) {
+          return sendJSON(res, 400, { ok: false, error: '日程数据校验失败（未写盘）', problems });
         }
         await atomicWriteFile(SCHEDULE_PATH, body.content);
         return sendJSON(res, 200, { ok: true });
