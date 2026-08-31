@@ -1,9 +1,12 @@
-// 提醒判定逻辑回环测试：leadOf/evKey/reminderCandidates 从 mobile.html 原样提取执行；
+// 提醒判定逻辑回环测试：leadOf/evKey/reminderCandidates 从页面主脚本原样提取执行
+// （主脚本已抽离为外链 mobile-app.js；mobile.html 仅余 <script src> 引用，找不到时回退旧内联）；
 // 领域判定（occursOn/leadMinutes 底层）走共享模块 occur.js 单一实现——测试不再自带 occursOn 拷贝
 // （历史教训：本文件曾内嵌一份漏了 deadline 截止判定的过期拷贝，与页面行为漂移）。
 const fs = require('fs');
 const TTOccur = require('../occur.js');
-const src = fs.readFileSync('mobile.html', 'utf8');
+const src = fs.existsSync('mobile-app.js')
+  ? fs.readFileSync('mobile-app.js', 'utf8')
+  : fs.readFileSync('mobile.html', 'utf8');
 const start = src.indexOf('function leadOf');
 const end = src.indexOf('function showReminder');
 if (start < 0 || end < 0) { console.log('EXTRACT FAILED'); process.exit(1); }

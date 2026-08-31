@@ -11,9 +11,9 @@ import { createInterface } from 'node:readline'
 import {
   HelperMessageKind,
   HelperReplyKind,
-  PROTOCOL_VERSION,
   createMessage,
   encodeMessage,
+  parseReply,
 } from './protocol.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -160,6 +160,17 @@ export class HelperProcess {
   #remember(message) {
     if (message.kind === HelperMessageKind.HELLO) this.snapshot.set('hello', encodeMessage(message))
     if (message.kind === HelperMessageKind.CONFIG) this.snapshot.set('config', encodeMessage(message))
+    // 显隐为幂等状态指令：纳入重启后重放（helper 重启窗口期 Ctrl+F5 的 SHOW/HIDE
+    // 不再静默丢失——此前仅 hello/config 有快照，重启间隙的显隐意图会被丢弃）。
+    // 两者互斥，只保留最新意图（Map 保序：重放顺序 hello → config → 显隐）。
+    if (message.kind === HelperMessageKind.SHOW) {
+      this.snapshot.set('show', encodeMessage(message))
+      this.snapshot.delete('hide')
+    }
+    if (message.kind === HelperMessageKind.HIDE) {
+      this.snapshot.set('hide', encodeMessage(message))
+      this.snapshot.delete('show')
+    }
   }
 
   #flushSnapshot() {
@@ -178,9 +189,16 @@ export class HelperProcess {
 
   #handleReply(line) {
     if (!line.trim()) return
+    let reply
     try {
-      const reply = JSON.parse(line)
-      if (reply?.protocolVersion === PROTOCOL_VERSION && reply.kind === HelperReplyKind.READY) {
+      // 协议解析单一实现（protocol.js 的 parseReply：校验版本与 kind；
+      // 此前此处内联 JSON.parse + 手工校验，与 protocol.js 形成漂移双源）
+      reply = parseReply(line)
+    } catch {
+      reply = null // 非协议输出（如库的杂散 print）仅作调试日志
+    }
+    if (reply) {
+      if (reply.kind === HelperReplyKind.READY) {
         if (this.spawned) return
         const firstSpawn = !this.hasEverSpawned
         this.hasEverSpawned = true
@@ -194,16 +212,14 @@ export class HelperProcess {
         if (this.stopping && this.child) this.child.stdin.end()
         return
       }
-      if (reply?.protocolVersion === PROTOCOL_VERSION && reply.kind === HelperReplyKind.PONG) {
+      if (reply.kind === HelperReplyKind.PONG) {
         this.lastPongAt = Date.now()
         return
       }
-      if (reply?.protocolVersion === PROTOCOL_VERSION && reply.kind === HelperReplyKind.CLOSED) {
+      if (reply.kind === HelperReplyKind.CLOSED) {
         this.restartSuppressed = true
         return
       }
-    } catch {
-      // 非协议输出仅作调试日志
     }
     this.logger.debug?.(`dsh-timetable-reminder: ${line}`)
   }
