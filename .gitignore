@@ -31,3 +31,6 @@ Thumbs.db
 auto_timetable.zip
 
 schedule.json
+
+# 会话摘要审查临时目录（含真实日程/姓名等隐私，用完即删，切勿提交）
+.tmp-dsh-review/
