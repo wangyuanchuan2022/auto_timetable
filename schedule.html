@@ -88,10 +88,11 @@
   <div class="dshell">
     <div class="dshell-card tt-topbar">
       <div class="tt-toolbar">
-        <div>
-          <h1 class="dshell-title" id="ttTitle">每周日程表</h1>
-          <p class="dshell-sub" id="ttSub"></p>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <h1 class="dshell-title" id="ttTitle" style="margin:0">每周日程表</h1>
+          <span class="dshell-badge dshell-badgeWait" id="termBadge" style="display:none"></span>
         </div>
+        <p class="dshell-sub" id="ttSub"></p>
         <div class="tt-statusbar">
           <span id="ttStatus">加载中…</span>
           <span class="dshell-badge dshell-badgeDone" id="saveStatus" style="display:none"></span>
@@ -118,11 +119,16 @@
             </select>
           </label>
           <button class="dshell-btn" id="btnNew">＋ 新建</button>
+          <button class="dshell-btn dshell-btnGhost" id="btnHistory">历史</button>
+          <button class="dshell-btn dshell-btnGhost" id="btnImport">导入 JSON</button>
+          <button class="dshell-btn dshell-btnGhost" id="btnExportJson">导出 JSON</button>
+          <button class="dshell-btn dshell-btnGhost" id="btnExportIcs">导出 ICS</button>
           <button class="dshell-btn dshell-btnGhost" id="btnRefresh">刷新</button>
           <button class="dshell-btn dshell-btnGhost" id="btnEdit">临时预览</button>
           <button class="dshell-btn" id="btnMobile">手机访问</button>
         </div>
       </div>
+      <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
     </div>
 
     <!-- 手机访问（独立实现）：由 mobile-server.mjs 托管，与 dsh-pocket 的扫码访问完全分离 -->
@@ -175,6 +181,27 @@
       </div>
       <textarea id="jsonArea" class="dshell-textarea" style="height:220px;font-family:ui-monospace,Consolas,monospace;margin-top:8px;white-space:pre" spellcheck="false"></textarea>
       <div class="dshell-muted" id="editMsg" style="margin-top:4px"></div>
+    </div>
+
+    <div class="dshell-card" id="historyPanel" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <h2 class="dshell-sub" style="margin:0;font-size:12.5px">历史归档（过期满 3 个月自动移入；不渲染、不提醒）</h2>
+        <button class="dshell-btn dshell-btnGhost" id="btnCloseHistory" style="padding:3px 10px;font-size:11.5px">收起</button>
+      </div>
+      <div class="dshell-divider"></div>
+      <div id="historyList" style="max-height:260px;overflow-y:auto"></div>
+    </div>
+
+    <div class="dshell-card" id="importPanel" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <h2 class="dshell-sub" style="margin:0;font-size:12.5px">导入 JSON（预览确认）</h2>
+        <button class="dshell-btn dshell-btnGhost" id="btnImportCancel" style="padding:3px 10px;font-size:11.5px">取消</button>
+      </div>
+      <div class="dshell-divider"></div>
+      <div class="dshell-muted" id="importText"></div>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button class="dshell-btn" id="btnImportOk">确认导入（整体替换当前数据）</button>
+      </div>
     </div>
 
     <div class="dshell-card" id="backupPanel" style="display:none">
@@ -758,6 +785,10 @@
       var m = data.meta || {};
       titleEl.textContent = m.title || '每周日程表';
       document.title = m.title || '每周日程表';
+      var tw = termWeekInfo();
+      var tb = $('termBadge');
+      if (tw) { tb.textContent = '第 ' + tw + ' 教学周'; tb.style.display = ''; }
+      else { tb.style.display = 'none'; }
 
       var srcBadge = document.createElement('span');
       srcBadge.className = (source.indexOf('内置') > -1) ? 'dshell-badge dshell-badgeWait' : 'dshell-badge dshell-badgeDone';
@@ -1004,6 +1035,191 @@
       $('backupPanel').style.display = 'none';
       setSaveStatus('已保留文件现值（本地备份已丢弃）', true);
     };
+
+    // ---------- 历史归档 / 导入导出 / 教学周显示（P2-3 学生场景） ----------
+    function renderHistory() {
+      var listEl = $('historyList');
+      var arch = (data && Array.isArray(data.archive)) ? data.archive : [];
+      listEl.innerHTML = '';
+      if (!arch.length) {
+        var empty = div('dshell-muted');
+        empty.textContent = '暂无归档事件（事件过期满 3 个月后会自动移入此处）。';
+        listEl.appendChild(empty);
+        return;
+      }
+      arch.slice().reverse().forEach(function (ev, revIdx) {
+        var idx = arch.length - 1 - revIdx; // 原始索引（最新归档排最上）
+        var row = div(''); row.style.cssText = 'display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#262b36)';
+        var info = div(''); info.style.minWidth = '0'; info.style.flex = '1';
+        var t = document.createElement('span'); t.style.fontWeight = '600'; t.textContent = ev.title || '(未命名)';
+        var meta = document.createElement('span'); meta.className = 'dshell-muted'; meta.style.marginLeft = '8px';
+        var ends = ev.deadline || (ev.type === 'once' ? ev.date : (ev.repeat && ev.repeat.until)) || '—';
+        meta.textContent = '类型 ' + (ev.type || 'once') + ' · 截止 ' + ends + ' · 归档于 ' + String(ev.archivedAt || '—').replace('T', ' ').slice(0, 16);
+        info.appendChild(t); info.appendChild(meta);
+        var btn = document.createElement('button');
+        btn.className = 'dshell-btn dshell-btnGhost'; btn.style.flex = 'none'; btn.style.padding = '3px 10px'; btn.style.fontSize = '11.5px';
+        btn.textContent = '恢复到日程';
+        btn.onclick = function () {
+          if (!window.confirm('恢复事件「' + (ev.title || '未命名') + '」到日程？截止日期按原值保留——若已过期则不显示，请恢复后在编辑器里及时修改。')) return;
+          var item = Object.assign({}, arch[idx]);
+          delete item.archivedAt;
+          arch.splice(idx, 1);
+          if (!data.events) data.events = [];
+          data.events.push(item);
+          renderHistory();
+          render();
+          save();
+        };
+        row.appendChild(info); row.appendChild(btn);
+        listEl.appendChild(row);
+      });
+    }
+    $('btnHistory').onclick = function () {
+      var panel = $('historyPanel');
+      var on = panel.style.display === 'none';
+      panel.style.display = on ? 'block' : 'none';
+      if (on) { renderHistory(); panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+    };
+    $('btnCloseHistory').onclick = function () { $('historyPanel').style.display = 'none'; };
+
+    // ---- 导入 JSON：文件选择 → 校验 → 预览（整体替换警告）→ 确认后走 save 链路写入 ----
+    var pendingImport = null;
+    $('btnImport').onclick = function () { $('importFile').click(); };
+    $('btnImportCancel').onclick = function () {
+      pendingImport = null;
+      $('importPanel').style.display = 'none';
+    };
+    $('importFile').addEventListener('change', function () {
+      var f = this.files && this.files[0];
+      this.value = '';
+      if (!f) return;
+      var handle = function (text) {
+        var obj = null;
+        try { obj = JSON.parse(text); } catch (err) { setSaveStatus('导入失败：不是合法 JSON', false); return; }
+        if (!obj || typeof obj !== 'object' || !Array.isArray(obj.events)) { setSaveStatus('导入失败：缺少 events 数组', false); return; }
+        var problems = TTOccur.validateSchedule(obj);
+        if (problems.length) {
+          var p0 = problems[0];
+          setSaveStatus('导入失败：' + problems.length + ' 条事件校验未过（如 events[' + (p0.index || 0) + ']' + (p0.title ? '「' + p0.title + '」' : '') + '：' + p0.errors[0] + '）', false);
+          return;
+        }
+        pendingImport = obj;
+        $('importText').innerHTML = '';
+        var line1 = document.createElement('div');
+        line1.textContent = '将导入 ' + obj.events.length + ' 条事件' + (Array.isArray(obj.archive) ? '、' + obj.archive.length + ' 条归档' : '') + '；当前数据 ' + ((data && data.events) || []).length + ' 条事件。';
+        var line2 = document.createElement('div');
+        line2.style.marginTop = '4px'; line2.style.color = '#d29922';
+        line2.textContent = '⚠ 导入将整体替换当前数据（含 meta 与归档）；如需保留请先「导出 JSON」备份。';
+        $('importText').appendChild(line1); $('importText').appendChild(line2);
+        $('importPanel').style.display = 'block';
+        $('importPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      };
+      if (f.text) { f.text().then(handle); return; }
+      var fr = new FileReader();
+      fr.onload = function () { handle(String(fr.result)); };
+      fr.onerror = function () { setSaveStatus('导入失败：文件读取失败', false); };
+      fr.readAsText(f);
+    });
+    $('btnImportOk').onclick = function () {
+      if (!pendingImport) return;
+      data = pendingImport;
+      pendingImport = null;
+      source = '导入 JSON';
+      var m = data.meta || {};
+      rangeMode = (m.timeStart && m.timeEnd) ? 'meta' : 'auto';
+      $('importPanel').style.display = 'none';
+      render();
+      save();
+    };
+
+    // ---- 导出 JSON / ICS：纯前端 Blob 下载 ----
+    function downloadFile(name, content, mime) {
+      var blob = new Blob([content], { type: mime || 'application/octet-stream' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () {
+        try { URL.revokeObjectURL(a.href); } catch (e) {}
+        if (a.parentNode) a.parentNode.removeChild(a);
+      }, 500);
+    }
+    $('btnExportJson').onclick = function () {
+      downloadFile('timetable-backup-' + fmtDate(new Date()) + '.json', JSON.stringify(data, null, 2) + '\n', 'application/json');
+      setSaveStatus('已导出 JSON 备份（含归档）', true);
+    };
+
+    // ICS 文本转义（RFC 5545：反斜杠/分号/逗号/换行）
+    function icsEsc(s) {
+      return String(s == null ? '' : s)
+        .replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,')
+        .replace(/\r\n/g, '\\n').replace(/[\r\n]/g, '\\n');
+    }
+    // ICS 折行（RFC 5545 简版，按字符）：超 75 折 74，续行前置空格
+    function icsFold(line) {
+      var s = String(line);
+      if (s.length <= 75) return s;
+      var out = [s.slice(0, 74)];
+      s = s.slice(74);
+      while (s.length > 74) { out.push(' ' + s.slice(0, 73)); s = s.slice(73); }
+      if (s) out.push(' ' + s);
+      return out.join('\r\n');
+    }
+    function icsStamp(d) { // YYYYMMDDTHHMMSS 本地时间
+      return d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0')
+        + 'T' + String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0') + String(d.getSeconds()).padStart(2, '0');
+    }
+    function icsAt(day, min) { // day 日期 + 当日分钟偏移 → 本地时间串
+      return icsStamp(new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(min / 60), min % 60, 0));
+    }
+    function buildIcs(fromDay, dayCount) {
+      var lines = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//auto_timetable//智能工作表//CN',
+        'CALSCALE:GREGORIAN',
+      ];
+      var nowStamp = icsStamp(new Date()) + 'Z';
+      var valid = (data && Array.isArray(data.events) ? data.events : []).filter(function (ev) { return TTOccur.validateEvent(ev).length === 0; });
+      for (var off = 0; off < dayCount; off++) {
+        var day = addDays(startOfDay(fromDay), off);
+        var ds = fmtDate(day);
+        valid.forEach(function (ev) {
+          if (!occursOn(ev, day)) return;
+          var s = toMin(ev.start), e = toMin(ev.end);
+          var endDay = (e <= s) ? addDays(day, 1) : day; // 跨午夜（end<=start）：结束落在次日
+          lines.push('BEGIN:VEVENT');
+          lines.push('UID:' + (ev.id || ev.title || 'evt') + '-' + ds.replace(/-/g, '') + '@auto-timetable');
+          lines.push('DTSTAMP:' + nowStamp);
+          lines.push('DTSTART:' + icsAt(day, s));
+          lines.push('DTEND:' + icsAt(endDay, e));
+          lines.push('SUMMARY:' + icsEsc(ev.title));
+          if (ev.location) lines.push('LOCATION:' + icsEsc(ev.location));
+          if (ev.note) lines.push('DESCRIPTION:' + icsEsc(ev.note));
+          lines.push('END:VEVENT');
+        });
+      }
+      lines.push('END:VCALENDAR');
+      return lines.map(icsFold).join('\r\n') + '\r\n';
+    }
+    $('btnExportIcs').onclick = function () {
+      var ics = buildIcs(new Date(), 56); // 未来 8 周（56 天）按 occursOn 展开
+      downloadFile('timetable-' + fmtDate(new Date()) + '.ics', ics, 'text/calendar;charset=utf-8');
+      setSaveStatus('已导出 ICS（未来 8 周，' + ((ics.match(/BEGIN:VEVENT/g) || []).length) + ' 条）', true);
+    };
+
+    // ---- 教学周显示（meta.termStart，周一起算；未配置/未开学不显示） ----
+    function termWeekInfo() {
+      var m = (data && data.meta) || {};
+      if (!TTOccur.isDateStr(m.termStart)) return null;
+      var base = TTOccur.mondayOf(parseDate(m.termStart));
+      var today = startOfDay(new Date());
+      var diff = Math.floor((today - base) / 86400000 / 7);
+      if (diff < 0) return null; // 未开学
+      return diff + 1;
+    }
+
     $('btnPrev').onclick = function () { cursor = addDays(weekAnchor(cursor), -7); render(); };
     $('btnNext').onclick = function () { cursor = addDays(weekAnchor(cursor), 7); render(); };
     $('btnToday').onclick = function () { cursor = startOfDay(new Date()); render(); };

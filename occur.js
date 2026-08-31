@@ -4,12 +4,14 @@
  * （历史教训：occursOn 曾在 3 个 JS 端各存一份且已现漂移，其中一份漏了 deadline 截止）。
  *
  * 语义与 Python 侧 timetable_core.py 对齐（.qrtest/occur-test.mjs 表驱动 + 对拍）：
- * - weekly: weekday 1=周一..7=周日
+ * - weekly: weekday 1=周一..7=周日；可选 weekPattern{start, odd} 单双周（start 所在周为第 1 教学周）
  * - once:   date = "YYYY-MM-DD"
  * - custom: repeat{interval(>=1), unit(day|week|month), start, days[](仅 week), until}
  *           week 未指定 days → 仅起始日的星期几；month 按「几号」匹配（起始日 > 28 时小月自然跳过）
  * - deadline: 到该日（含）为止生效
+ * - skip: ["YYYY-MM-DD", ...] 例外日期（停课/调休），该事件在这些日期不发生（先于类型判定）
  * - remindLead: 提醒提前分钟数（>=0；0 = 不提醒；缺失/非法回落默认，由 leadMinutes(ev, def) 提供）
+ * - isPurgeable/archiveFor: 过期归档判定与归档纯函数（服务端 purgeExpired 接入走共享模块）
  *
  * 双环境（UMD 风格小包装，无依赖）：
  * - Node：require / ESM default import（package.json 无 type，.js 按 CJS 加载，module.exports 生效）
@@ -42,13 +44,36 @@
     var d = new Date(p[0], p[1] - 1, p[2]);
     return d.getFullYear() === p[0] && d.getMonth() === p[1] - 1 && d.getDate() === p[2];
   }
+  /** d 所在教学周的周一（教学周按周一起算）。 */
+  function mondayOf(d) {
+    var x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+    return x;
+  }
+
+  // ---------- 单双周（weekPattern，仅 weekly）：以 start 所在周为第 1 教学周 ----------
+  // odd=true → 仅单数教学周（1,3,5,…）发生；odd=false → 仅双数教学周（2,4,6,…）发生。
+  // start 非法/缺失视为无模式；早于基准周不发生。
+  function weekPatternOk(ev, day) {
+    var wp = ev && ev.weekPattern;
+    if (!wp || typeof wp !== 'object' || !isDateStr(wp.start)) return true;
+    var base = mondayOf(parseDate(wp.start));
+    var diff = Math.floor((new Date(day.getFullYear(), day.getMonth(), day.getDate()) - base) / 86400000 / 7);
+    if (diff < 0) return false; // 早于基准周（termStart 之前）
+    var weekNo = diff + 1;
+    return (weekNo % 2 === 1) === !!wp.odd;
+  }
 
   // ---------- 事件是否发生在日期 day（Date，本地墙上时间） ----------
   function occursOn(ev, day) {
     var ds = fmtDate(day);
     if (ev.deadline && ds > ev.deadline) return false; // 截止日期：到该日（含）为止生效
+    if (Array.isArray(ev.skip) && ev.skip.indexOf(ds) !== -1) return false; // 例外日期：停课/调休，该日不发生
     var type = ev.type || 'once';
-    if (type === 'weekly') return isoWeekday(day) === (parseInt(ev.weekday, 10) || 1);
+    if (type === 'weekly') {
+      if (isoWeekday(day) !== (parseInt(ev.weekday, 10) || 1)) return false;
+      return weekPatternOk(ev, day); // 单双周（未配置 = 恒真）
+    }
     if (type === 'once') return ev.date === ds;
     if (type === 'custom') {
       var r = ev.repeat || {};
@@ -133,6 +158,25 @@
         errs.push('remindLead 必须是 >= 0 的数字（0 = 不提醒）');
       }
     }
+    // 例外日期（stop 课/调休）：必须是合法日期数组
+    if (ev.skip !== undefined && ev.skip !== null) {
+      if (!Array.isArray(ev.skip)) errs.push('skip 必须是日期数组（YYYY-MM-DD）');
+      else {
+        for (var si = 0; si < ev.skip.length; si++) {
+          if (!isDateStr(ev.skip[si])) { errs.push('skip 数组元素必须是有效日期（YYYY-MM-DD）'); break; }
+        }
+      }
+    }
+    // 单双周（仅 weekly）
+    if (ev.weekPattern !== undefined && ev.weekPattern !== null) {
+      var wp = ev.weekPattern;
+      if (type !== 'weekly') errs.push('weekPattern 仅适用于 weekly 事件');
+      if (!wp || typeof wp !== 'object' || Array.isArray(wp)) errs.push('weekPattern 必须是对象 { start, odd }');
+      else {
+        if (!isDateStr(wp.start)) errs.push('weekPattern.start 必须是有效日期（YYYY-MM-DD）');
+        if (wp.odd !== undefined && typeof wp.odd !== 'boolean') errs.push('weekPattern.odd 必须是 true/false');
+      }
+    }
     return errs;
   }
 
@@ -155,6 +199,36 @@
     return problems;
   }
 
+  // ---------- 过期归档（P2-3）：purge 判定与归档纯函数 ----------
+  /** 是否可归档：截止日期（deadline / once 的 date / custom 的 repeat.until）早于 cutoff（严格小于）。 */
+  function isPurgeable(ev, cutoff) {
+    var dl = (typeof ev.deadline === 'string' && DATE_RE.test(ev.deadline)) ? ev.deadline : null;
+    if (!dl && (ev.type || 'once') === 'once') dl = (typeof ev.date === 'string' && DATE_RE.test(ev.date)) ? ev.date : null;
+    if (!dl && ev.type === 'custom' && ev.repeat && typeof ev.repeat.until === 'string') dl = ev.repeat.until;
+    return !!dl && dl < cutoff;
+  }
+
+  /**
+   * 归档纯函数：把 data.events 中过期的（isPurgeable）移入 data.archive（附 archivedAt 时间戳），
+   * 返回新 data（不修改入参）；无可归档项时原样返回。archive 节点不渲染、不提醒（调用方只遍历 events）。
+   * nowMs 可注入（测试用）；缺省取当前时间。
+   */
+  function archiveFor(data, cutoff, nowMs) {
+    if (!data || typeof data !== 'object' || !Array.isArray(data.events)) return data;
+    var ts = new Date(nowMs === undefined ? Date.now() : nowMs).toISOString();
+    var kept = [], moved = [];
+    for (var i = 0; i < data.events.length; i++) {
+      var ev = data.events[i];
+      if (isPurgeable(ev, cutoff)) moved.push(Object.assign({}, ev, { archivedAt: ts }));
+      else kept.push(ev);
+    }
+    if (!moved.length) return data;
+    var out = Object.assign({}, data);
+    out.events = kept;
+    out.archive = (Array.isArray(data.archive) ? data.archive.slice() : []).concat(moved);
+    return out;
+  }
+
   return {
     occursOn: occursOn,
     leadMinutes: leadMinutes,
@@ -162,7 +236,11 @@
     fmtDate: fmtDate,
     isoWeekday: isoWeekday,
     isDateStr: isDateStr,
+    mondayOf: mondayOf,
+    weekPatternOk: weekPatternOk,
     validateEvent: validateEvent,
     validateSchedule: validateSchedule,
+    isPurgeable: isPurgeable,
+    archiveFor: archiveFor,
   };
 });

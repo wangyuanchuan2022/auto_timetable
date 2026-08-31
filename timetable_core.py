@@ -8,19 +8,45 @@ reminder_app.py 与 reminder-plugin/runtime/helper.py 各存一份且已现漂�
 - reminder-plugin/runtime/helper.py（DSH 插件版，经 sys.path 注入仓库根后 import）
 
 数据契约与 schedule.json / mobile-server.mjs / 网页端一致：
-- weekly: weekday 1=周一..7=周日
+- weekly: weekday 1=周一..7=周日；可选 weekPattern{start, odd} 单双周
 - once:   date = "YYYY-MM-DD"
 - custom: repeat{interval, unit(day|week|month), start, days[], until}
 - deadline: 到该日（含）为止生效
+- skip: ["YYYY-MM-DD", ...] 例外日期（停课/调休），该日不发生
 - remindLead: 提醒提前分钟数（>=0；0 = 不提醒；缺失/非法回落默认双档）
 
 纯标准库、无 UI 依赖。
 """
 import json
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime, time as dtime, timedelta
 
 # 事件未带有效 remindLead 时的默认提醒双档（分钟，大在前）
 DEFAULT_LEADS = (30, 10)
+
+
+def _week_monday(d):
+    """d 所在教学周的周一（教学周按周一起算）。"""
+    return d - timedelta(days=d.weekday())
+
+
+def _week_pattern_ok(ev, d):
+    """单双周（weekPattern，仅 weekly）：以 start 所在周为第 1 教学周，
+    odd=true 仅单数周发生、false 仅双数周发生；start 非法/缺失视为无模式；早于基准周不发生。"""
+    wp = ev.get("weekPattern") or {}
+    if not isinstance(wp, dict):
+        return True
+    st = wp.get("start")
+    if not st:
+        return True
+    try:
+        base = _week_monday(date.fromisoformat(st))
+    except Exception:
+        return True
+    diff = (d - base).days // 7
+    if diff < 0:
+        return False
+    week_no = diff + 1
+    return (week_no % 2 == 1) == bool(wp.get("odd"))
 
 
 def parse_hhmm(s, default="08:00"):
@@ -33,14 +59,22 @@ def parse_hhmm(s, default="08:00"):
 
 
 def occurs_on(ev, d):
-    """事件是否发生在日期 d。weekday 语义：1=周一..7=周日（与网页版一致）。"""
+    """事件是否发生在日期 d。weekday 语义：1=周一..7=周日（与网页版一致）。
+
+    判定顺序：deadline 截止 → skip 例外日期 → 原类型判定（weekly 另过 weekPattern 单双周）。
+    """
     t = ev.get("type", "once")
     ds = d.isoformat()
     dl = ev.get("deadline")
     if dl and ds > dl:
         return False  # 截止日期：到该日（含）为止生效
+    sk = ev.get("skip")
+    if isinstance(sk, list) and ds in sk:
+        return False  # 例外日期（停课/调休）：该日不发生
     if t == "weekly":
-        return d.weekday() + 1 == int(ev.get("weekday", 1))
+        if d.weekday() + 1 != int(ev.get("weekday", 1)):
+            return False
+        return _week_pattern_ok(ev, d)  # 单双周（未配置恒真）
     if t == "once":
         return ev.get("date") == ds
     if t == "custom":

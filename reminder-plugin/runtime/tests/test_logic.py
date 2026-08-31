@@ -77,6 +77,47 @@ class OccursOnTests(unittest.TestCase):
         self.assertTrue(occurs_on(ev, date(2026, 8, 24)))
         self.assertFalse(occurs_on(ev, date(2026, 8, 31)))
 
+    def test_skip_dates(self):
+        # 例外日期（停课/调休）：deadline → skip → 类型判定
+        ev = {"type": "weekly", "weekday": 1, "skip": ["2026-08-31"]}  # 每周一，9/1 前的周一为 8/31
+        self.assertFalse(occurs_on(ev, date(2026, 8, 31)))  # skip 命中 → 不发生
+        self.assertTrue(occurs_on(ev, date(2026, 9, 7)))    # skip 未命中 → 正常发生
+        once = {"type": "once", "date": "2026-08-28", "skip": ["2026-08-28"]}
+        self.assertFalse(occurs_on(once, date(2026, 8, 28)))  # once 同样生效
+        skip_not_str = {"type": "weekly", "weekday": 1, "skip": "2026-08-31"}  # 非列表忽略
+        self.assertTrue(occurs_on(skip_not_str, date(2026, 8, 31)))
+
+    def test_week_pattern_odd_weeks(self):
+        # 单双周：start 所在周为第 1 教学周；odd=true 仅单数周（1,3,5…）发生
+        ev = {"type": "weekly", "weekday": 1, "weekPattern": {"start": "2026-09-14", "odd": True}}
+        self.assertTrue(occurs_on(ev, date(2026, 9, 14)))   # 第 1 周（start 所在周的周一）
+        self.assertFalse(occurs_on(ev, date(2026, 9, 21)))  # 第 2 周
+        self.assertTrue(occurs_on(ev, date(2026, 9, 28)))   # 第 3 周（跨 3 周验证交替）
+
+    def test_week_pattern_even_weeks_and_edge(self):
+        ev = {"type": "weekly", "weekday": 1, "weekPattern": {"start": "2026-09-14", "odd": False}}
+        self.assertFalse(occurs_on(ev, date(2026, 9, 14)))  # 第 1 周
+        self.assertTrue(occurs_on(ev, date(2026, 9, 21)))   # 第 2 周
+        # 基准周取 start 所在周（start 为周三 9/16 → 该周周一 9/14 属第 1 周）
+        ev2 = {"type": "weekly", "weekday": 1, "weekPattern": {"start": "2026-09-16", "odd": True}}
+        self.assertTrue(occurs_on(ev2, date(2026, 9, 14)))
+        # 早于基准周不发生
+        self.assertFalse(occurs_on(ev, date(2026, 9, 7)))
+        # 非法 start 视为无模式
+        ev3 = {"type": "weekly", "weekday": 1, "weekPattern": {"start": "bad", "odd": True}}
+        self.assertTrue(occurs_on(ev3, date(2026, 9, 21)))
+        # 仅作用 weekly：custom 忽略 weekPattern
+        ev4 = {"type": "custom", "weekPattern": {"start": "2026-08-24", "odd": False},
+               "repeat": {"interval": 1, "unit": "day", "start": "2026-08-24"}}
+        self.assertTrue(occurs_on(ev4, date(2026, 8, 24)))
+
+    def test_skip_plus_week_pattern_combo(self):
+        # 单双周允许但 skip 拦截；skip 未命中且周允许 → 发生
+        ev = {"type": "weekly", "weekday": 1,
+              "weekPattern": {"start": "2026-09-14", "odd": True}, "skip": ["2026-09-28"]}
+        self.assertFalse(occurs_on(ev, date(2026, 9, 28)))  # 第 3 周本应发生，skip 拦截
+        self.assertTrue(occurs_on(ev, date(2026, 9, 14)))   # 第 1 周且未 skip
+
 
 class LeadMinutesTests(unittest.TestCase):
     """事件级 remindLead 档位（与 mobile-server / mobile.html 的 leadOf 语义对齐）。"""
