@@ -79,7 +79,7 @@ export function loadPage(pagePath) {
   let occurSrc = '';
   try { occurSrc = readFileSync(new URL('../occur.js', import.meta.url), 'utf8'); } catch (e) {}
 
-  const ids = ['datePick', 'list', 'notifyBtn', 'notifyState', 'chatLog', 'chatThumbs', 'chatIn', 'chatAttach', 'chatSend', 'chatFile', 'modelBtn', 'newChatBtn', 'dDel', 'pIn', 'pOk', 'pCancel', 'pMsg'];
+  const ids = ['datePick', 'list', 'notifyBtn', 'notifyState', 'chatLog', 'chatThumbs', 'chatIn', 'chatAttach', 'chatSend', 'chatFile', 'modelBtn', 'newChatBtn', 'dDel', 'pIn', 'pOk', 'pCancel', 'pMsg', 'dWeekPattern', 'dWeekPatternWrap', 'dSkip'];
   const byId = {}; ids.forEach(id => { byId[id] = makeEl('div'); });
 
   let lastWs = null;

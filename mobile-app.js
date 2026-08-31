@@ -125,8 +125,19 @@
         s = '每 ' + (parseInt(r.interval, 10) || 1) + ' ' + (unitMap[r.unit || 'day'] || '天') + '重复 · 自 ' + (r.start || '?');
         if (r.until) s += ' 至 ' + r.until;
       }
+      if (t === 'weekly' && ev.weekPattern && ev.weekPattern.start) {
+        s += ' · ' + (ev.weekPattern.odd === false ? '双周' : '单周') + '（自 ' + ev.weekPattern.start + ' 所在周起算）';
+      }
+      if (Array.isArray(ev.skip) && ev.skip.length) s += ' · 例外 ' + ev.skip.length + ' 天';
       if (t !== 'once' && ev.deadline) s += ' · 截止 ' + ev.deadline;
       return s;
+    }
+
+    /** weekPattern.start 的新建默认值：优先 meta.termStart（当前学期），无则今天所在周的周一。 */
+    function defaultPatternStart() {
+      var ts = data && data.meta && data.meta.termStart;
+      if (TTOccur.isDateStr(ts)) return ts;
+      return TTOccur.fmtDate(TTOccur.mondayOf(new Date()));
     }
 
     function load() {
@@ -227,6 +238,12 @@
         '  <div class="field"><label>备注</label><input id="dNote" placeholder="可选" /></div>' +
         '  <div class="field"><label>提前提醒（分钟，0 = 不提醒，默认 20）</label><input type="number" id="dLead" min="0" max="1440" step="1" /></div>' +
         '  <div class="field"><label>截止日期（到该日（含）为止生效；过期满 3 个月自动清除）</label><input type="date" id="dDeadline" /></div>' +
+        '  <div class="field" id="dWeekPatternWrap" style="display:none"><label>单双周（仅每周重复课程）</label><select id="dWeekPattern">' +
+        '    <option value="none">每周（不区分单双周）</option>' +
+        '    <option value="odd">单周（第 1/3/5… 教学周上课）</option>' +
+        '    <option value="even">双周（第 2/4/6… 教学周上课）</option>' +
+        '  </select></div>' +
+        '  <div class="field"><label>例外日期（停课/调休，这些日期不上课）</label><input id="dSkip" placeholder="如 2026-10-01、2026-10-08（逗号或空格分隔）；留空 = 无" /></div>' +
         '  <div class="btns">' +
         '    <button class="btn btnCancel" id="dCancel">取消</button>' +
         '    <button class="btn btnSave" id="dSave">保存</button>' +
@@ -243,6 +260,15 @@
       $('dNote').value = ev.note || '';
       $('dLead').value = (typeof ev.remindLead === 'number' && isFinite(ev.remindLead)) ? ev.remindLead : 20;
       $('dDeadline').value = ev.deadline || '';
+      // 单双周（仅 weekly 显示）：无 / 单周(odd:true) / 双周(odd:false)，带出当前状态
+      var isWeeklyEv = (ev.type || 'once') === 'weekly';
+      $('dWeekPatternWrap').style.display = isWeeklyEv ? '' : 'none';
+      var wpSel = $('dWeekPattern');
+      if (ev.weekPattern && ev.weekPattern.odd === false) wpSel.value = 'even';
+      else if (ev.weekPattern && ev.weekPattern.start) wpSel.value = 'odd';
+      else wpSel.value = 'none';
+      // 例外日期：数组 → 顿号分隔展示
+      $('dSkip').value = Array.isArray(ev.skip) ? ev.skip.join('、') : '';
       $('dMsg').textContent = '';
 
       function close() { mask.parentNode && mask.parentNode.removeChild(mask); editEv = null; }
@@ -305,12 +331,36 @@
         if (!title) { msgEl.textContent = '名称不能为空'; msgEl.classList.add('err'); return; }
         if (!start || !end) { msgEl.textContent = '请填写开始与结束时间'; msgEl.classList.add('err'); return; }
         if (toMin(end) === toMin(start)) { msgEl.textContent = '结束时间不能等于开始时间'; msgEl.classList.add('err'); return; }
-        // P1-2 结构校验（共享模块）：拦截日期/截止等格式错误，含未编辑字段的整体一致性
+        // 例外日期（skip）：逗号/中文逗号/顿号/空格分隔 → 数组；空 = 清除；格式逐个校验
+        var skipRaw = String($('dSkip').value || '').trim();
+        var skipList = skipRaw ? skipRaw.split(/[,，、\s]+/).filter(Boolean) : [];
+        for (var si = 0; si < skipList.length; si++) {
+          if (!TTOccur.isDateStr(skipList[si])) {
+            msgEl.textContent = '例外日期格式错误：' + skipList[si] + '（需为 YYYY-MM-DD，逗号或空格分隔）';
+            msgEl.classList.add('err');
+            return;
+          }
+        }
+        // 单双周（weekPattern，仅 weekly）：none → 清除；odd/even → start 保留已有值，新建默认 meta.termStart（无则本周一）
+        var wpVal = $('dWeekPattern').value;
+        var isWeeklyEv = (editEv.type || 'once') === 'weekly';
+        var newWp = null;
+        if (isWeeklyEv && wpVal !== 'none') {
+          newWp = {
+            start: (editEv.weekPattern && TTOccur.isDateStr(editEv.weekPattern.start))
+              ? editEv.weekPattern.start
+              : defaultPatternStart(),
+            odd: wpVal === 'odd',
+          };
+        }
+        // P1-2 结构校验（共享模块）：拦截日期/截止/skip/weekPattern 等格式错误，含未编辑字段的整体一致性
         var cand = {
           type: editEv.type || 'once',
           title: title, start: start, end: end,
           date: editEv.date, weekday: editEv.weekday, repeat: editEv.repeat,
           deadline: $('dDeadline').value || undefined,
+          skip: skipList.length ? skipList : undefined,
+          weekPattern: newWp || undefined,
         };
         var errs = TTOccur.validateEvent(cand);
         if (errs.length) { msgEl.textContent = '无法保存：' + errs.join('；'); msgEl.classList.add('err'); return; }
@@ -321,6 +371,10 @@
         editEv.end = end;
         editEv.location = String($('dLoc').value || '').trim();
         editEv.note = String($('dNote').value || '').trim();
+        if (skipList.length) editEv.skip = skipList;
+        else delete editEv.skip; // 留空 = 清除例外日期
+        if (newWp) editEv.weekPattern = newWp;
+        else delete editEv.weekPattern; // 每周（none）或非 weekly → 清除
         var leadVal = parseInt($('dLead').value, 10);
         if (!isNaN(leadVal) && leadVal >= 0 && leadVal <= 1440) editEv.remindLead = leadVal;
         else delete editEv.remindLead; // 缺省回落到默认 20 分钟
