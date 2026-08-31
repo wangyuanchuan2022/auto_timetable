@@ -110,6 +110,20 @@ const resFail = mkRes();
 check('C8 guardPin 失败：写 JSON 响应并返回 false', guardPin(mkReq({ ra: '203.0.113.77', headers: { ...lbHeaders, 'x-tt-pin': 'bad' } }), resFail, PINSET) === false && resFail.status === 401 && resFail.body.includes('pin required'));
 const resOk = mkRes();
 check('C9 guardPin 成功：返回 true 且不写响应', guardPin(mkReq({ headers: { ...lbHeaders, 'x-tt-pin': PIN } }), resOk, PINSET) === true && resOk.status === null);
+// 回归防护（2026-08-31 线上事故）：旧版确定性 Cookie 在会话 token 升级后失效，
+// 手机页自动请求（日程/watch/4s 轮询）带旧 Cookie 刷满失败阈值 → 用户首次密码登录被 429 堵死。
+// 修复语义：无效 Cookie / 无凭据 ≠ 密码尝试，不计数不锁定。
+resetRate();
+const legacyIp = '198.51.100.99';
+const mkLegacyCookie = () => mkReq({ ra: legacyIp, headers: { ...lbHeaders, cookie: `${COOKIE_NAME}=deadbeef${'0'.repeat(56)}` } }); // 旧确定性形态 hex
+let legacy401 = 0;
+for (let i = 0; i < 12; i++) { const r = checkPin(mkLegacyCookie(), PINSET); if (r.status === 401) legacy401++; }
+check('C10 无效 Cookie 连打 12 次仍全 401、不触发锁定（残留凭据≠密码尝试）', legacy401 === 12 && rateLocked(legacyIp) === 0, `401×${legacy401} locked=${rateLocked(legacyIp)}`);
+check('C11 无效 Cookie 风暴后，同 IP 正确密码仍立即放行', checkPin(mkReq({ ra: legacyIp, headers: { ...lbHeaders, 'x-tt-pin': PIN } }), PINSET).ok === true);
+resetRate();
+let anon401 = 0;
+for (let i = 0; i < 10; i++) { const r = checkPin(mkReq({ ra: legacyIp, headers: { ...lbHeaders } }), PINSET); if (r.status === 401) anon401++; }
+check('C12 无凭据请求 ×10 全 401、不计数（不构成密码爆破）', anon401 === 10 && rateLocked(legacyIp) === 0);
 
 // ========== D. clientIpOf（直连 socket / 隧道 cf 头 / tunnel-unknown） ==========
 section('D) clientIpOf');

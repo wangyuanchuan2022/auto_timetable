@@ -248,7 +248,14 @@ export function checkPin(req, settings) {
   if (token) ok = touchSession(settings, token);
   if (!ok && header) ok = verifyPinSync(header, settings); // 兼容头：明文 pin 与存储哈希时序安全比对
   if (ok) { rateClear(clientIpOf(req)); return { ok: true }; }
-  // 凭据缺失/错误才走闸门：单 IP 锁定 → 全局慢速闸 → 计数
+  // —— 限速语义（防连坐回归）：rateFail 只计「密码尝试失败」——
+  //   X-TT-Pin 头错误 = 密码猜测 → 计数锁定；/api/login 密码错误同样计数（路由内）。
+  //   而无效 Cookie（如旧版确定性 Cookie 在会话 token 升级后全部失效）与无凭据请求
+  //   不是密码尝试：只回 401 引导重新登录，不计锁、不受锁定连坐——否则手机页加载时的
+  //   自动请求（日程读取/watch/4 秒轮询兜底）会带着旧 Cookie 瞬间刷满失败阈值，
+  //   把用户第一次真正的密码登录也堵死（401→401 无数据面，不计数无安全损失）。
+  if (!header) return { ok: false, status: 401, error: 'pin required' };
+  // —— 以下仅 X-TT-Pin 密码尝试失败路径：单 IP 锁定 → 全局慢速闸 → 计数 ——
   const ip = clientIpOf(req);
   const retryAfter = rateLocked(ip);
   if (retryAfter > 0) return { ok: false, status: 429, retryAfter, error: `尝试次数过多，请 ${retryAfter} 秒后再试` };
@@ -418,11 +425,13 @@ export function createRouteDispatcher(deps) {
       const given = String(body.pin ?? '');
       if (!pinIsSet(settings)) return sendJSON(res, 403, { ok: false, error: 'pin required' }); // 统一 403，不泄露「是否设置过密码」
       const ip = clientIpOf(req);
-      const lock = rateLocked(ip);
-      if (lock > 0) return sendJSON(res, 429, { ok: false, error: `尝试次数过多，请 ${lock} 秒后再试`, retryAfter: lock }, { 'retry-after': String(lock) });
+      // 闸门只拦失败者：先验密码，正确密码立即放行并清桶——不被本 IP 既有失败记录连坐
+      // （旧实现锁定检查在密码验证之前：旧版 Cookie 失效引发的自动请求刷出锁定后，
+      //   用户第一次真正的密码登录也被 429 堵死）。scrypt 验证本身即计算成本，转嫁给爆破者。
       if (!given || !verifyPinSync(given, settings)) {
         // 全局慢速闸对登录失败同样生效（此前只在 checkPin 生效，/api/login 自身漏防分布式爆破）。
-        // 正确密码在上面已验证通过并 return，不会走到这里，合法登录不受闸门影响。
+        const lock = rateLocked(ip);
+        if (lock > 0) return sendJSON(res, 429, { ok: false, error: `尝试次数过多，请 ${lock} 秒后再试`, retryAfter: lock }, { 'retry-after': String(lock) });
         const hold = globalHoldSeconds();
         if (hold > 0) return sendJSON(res, 429, { ok: false, error: `失败次数过多，服务暂缓受理登录，请 ${hold} 秒后再试`, retryAfter: hold }, { 'retry-after': String(hold) });
         rateFail(ip);
