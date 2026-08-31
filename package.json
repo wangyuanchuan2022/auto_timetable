@@ -1,5 +1,13 @@
 {
+  "name": "auto-timetable",
+  "private": true,
+  "description": "智能工作表：桌面提醒 + 手机连接 + 日程表页面（DSH 插件组）",
   "dependencies": {
     "web-push": "^3.6.7"
+  },
+  "scripts": {
+    "test": "node .qrtest/run-test.js && node .qrtest/remind-test.js && node .qrtest/chat-setup-test.mjs && node .qrtest/dup-fix-test.mjs mobile.html && node .qrtest/md-render-test.mjs mobile.html && node .qrtest/new-chat-test.mjs mobile.html && node .qrtest/live-refresh-test.mjs mobile.html && node .qrtest/occur-test.mjs && node .qrtest/schedule-test.mjs",
+    "test:python": "python -m pytest reminder-plugin/runtime/tests/ -q",
+    "test:live": "node .qrtest/security-test.js"
   }
 }
