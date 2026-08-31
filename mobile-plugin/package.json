@@ -1,7 +1,7 @@
 {
   "name": "dsh-timetable-mobile",
   "version": "0.1.0",
-  "description": "随 DSH web 生命周期自动启动/停止 auto_timetable 的手机访问服务（mobile-server.mjs）：DSH 启动即拉起，DSH 关闭即回收（含 cloudflared 进程树）。",
+  "description": "随 DSH web 生命周期自动启动/停止 auto_timetable 的手机访问服务（mobile-server.mjs）：DSH 启动即拉起，DSH 关闭即回收。",
   "author": "auto_timetable",
   "type": "module",
   "main": "src/index.js",
