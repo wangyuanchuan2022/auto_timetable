@@ -19,6 +19,22 @@ import {
 const here = dirname(fileURLToPath(import.meta.url))
 const defaultHelperPath = resolve(here, '..', 'runtime', 'helper.py')
 
+// ---- 子进程 env 白名单：不继承宿主全量环境（宿主供应商密钥等凭据不下传）。
+// 基础运行变量走白名单；协议必需的 DSH_TTR_* 前缀变量（DSH_TTR_DATA /
+// DSH_TTR_HOTKEY / DSH_TTR_SHOW_ON_START / DSH_TTR_TEST_TOAST 等）逐前缀挑选透传。
+const ENV_WHITELIST = ['PATH', 'SYSTEMROOT', 'COMSPEC', 'TEMP', 'TMP', 'DSH_PORT', 'DSH_API_URL', 'NODE_ENV', 'LANG']
+function filteredChildEnv(extra = {}) {
+  const env = {}
+  for (const key of ENV_WHITELIST) {
+    const v = process.env[key]
+    if (v !== undefined) env[key] = v
+  }
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('DSH_TTR_')) env[key] = process.env[key]
+  }
+  return { ...env, ...extra } // options.env 为调用方显式指定，允许覆盖
+}
+
 export function defaultLaunch() {
   // Windows 优先使用 py 启动器；可用 DSH_TTR_PYTHON 指定解释器
   const pythonEnv = process.env.DSH_TTR_PYTHON
@@ -56,7 +72,7 @@ export class HelperProcess {
       if (!existsSync(helperPath)) throw new Error(`helper not found: ${helperPath}`)
       child = spawn(launch.command, [...launch.args], {
         cwd: this.options.cwd || resolve(here, '..'),
-        env: { ...process.env, ...this.options.env },
+        env: filteredChildEnv(this.options.env), // 白名单 + DSH_TTR_*，不继承宿主全量环境
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       })
