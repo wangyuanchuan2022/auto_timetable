@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """dsh-timetable-reminder · Python helper（参考 dsh-dafeiyu runtime/helper.py 的进程模型）
 
 DSH 插件宿主拥有本进程：stdin 按行收 JSON 命令，stdout 按行回 JSON 应答。
@@ -14,7 +14,7 @@ UI 全部基于 maliang（https://xiaokang2022.github.io/maliang-docs/3.1/）实
 - 按事件级 remindLead 提前 Toast（缺失/非法时默认 30、10 双档；0 明确不提醒）；
   启动时已过期的提醒点跳过
 - Toast：右下角滑入、堆叠、悬停暂停、底部进度条（对齐 Windows 原生通知）
-- 窗口隐藏/关闭后提醒照常触发；全局快捷键（默认 Ctrl+F5）切换主窗口显隐
+- 窗口隐藏/关闭后提醒照常触发；全局快捷键（默认 Ctrl+Alt+T）切换主窗口显隐
 - 数据文件每分钟自动重读，支持外部编辑（与网页版共用 schedule.json）；
   领域判定（occurs_on / 提醒档位 / 读取）统一来自仓库根 timetable_core.py 单一实现
 
@@ -596,7 +596,7 @@ class App:
         root.after(150, lambda: root.winfo_exists() and try_dwm_round_corners(root))
         root.protocol("WM_DELETE_WINDOW", self.hide)  # 关闭 = 隐藏，进程常驻继续提醒
 
-        self.apply_hotkey(self.cfg.get("hotkey", "ctrl+f5"))
+        self.apply_hotkey(self.cfg.get("hotkey", "ctrl+alt+t"))
         threading.Thread(target=stdin_thread_main, args=(self.cmd_q,), daemon=True).start()
         self.root.after(80, self.pump)
         self.refresh(True)
@@ -904,7 +904,7 @@ class App:
         return "今日无待触发提醒" if best is None else "下次提醒 %s" % best.strftime("%H:%M")
 
     def set_sub(self):
-        hk = self.cfg.get("hotkey", "ctrl+f5")
+        hk = self.cfg.get("hotkey", "ctrl+alt+t")
         leads = "/".join(str(x) for x in (self.cfg.get("leadMinutes") or [30, 10]))
         text = "提醒：按事件 remindLead 提前（缺省 %s 分钟各一次） · %s    数据：%s（每分钟自动重读）" % (
             leads, self.next_reminder_text(datetime.now()),
@@ -1005,9 +1005,9 @@ def main():
     FONT = pick_font_family(root)  # Segoe UI Variable（Win11）→ Segoe UI 回退
     cfg = {
         "dataPath": os.environ.get("DSH_TTR_DATA", "D:/tools/auto_timetable/schedule.json"),
-        "hotkey": os.environ.get("DSH_TTR_HOTKEY", "ctrl+f5"),
+        "hotkey": os.environ.get("DSH_TTR_HOTKEY", "ctrl+alt+t"),
         "leadMinutes": [30, 10],
-        # 无头模式：默认启动即隐藏主窗口，仅弹 Toast；Ctrl+F5 或 Toast「显示主窗口」唤出
+        # 无头模式：默认启动即隐藏主窗口，仅弹 Toast；Ctrl+Alt+T 或 Toast「显示主窗口」唤出
         "showOnStart": os.environ.get("DSH_TTR_SHOW_ON_START", "0") == "1",
     }
     app = App(root, cfg)

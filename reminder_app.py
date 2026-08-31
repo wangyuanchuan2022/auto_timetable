@@ -1,11 +1,12 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 当日日程提醒 · 桌面应用
 - 主窗口：列出当日日程（按开始时间升序），显示开始时间与标题（含地点/类型）
 - 提醒：按事件级 remindLead 提前弹窗（缺失/非法时默认开始前 30、10 分钟各一次；
   remindLead=0 明确不提醒）；过期时间点自动跳过；每点仅触发一次
 - 后台常驻：主窗口隐藏/关闭后提醒照常触发
-- 全局快捷键 Ctrl+F5：任意应用前台时可用，切换主窗口显示/隐藏
+- 全局快捷键 Ctrl+Alt+T：任意应用前台时可用，切换主窗口显示/隐藏
+  （原 Ctrl+F5 与浏览器强制刷新冲突，已改为低冲突组合）
 - 数据：与本目录网页版时间表共用 schedule.json（支持每周重复/一次性/自定义间隔）；
   领域判定（occurs_on / 提醒档位 / 读取）统一来自根目录 timetable_core.py 单一实现
 
@@ -26,17 +27,19 @@ from timetable_core import lead_minutes, load_day
 
 # ---------------- Win32 全局快捷键 ----------------
 MOD_CONTROL = 0x0002
-VK_F5 = 0x74
+MOD_ALT = 0x0001
+VK_T = 0x54
 WM_HOTKEY = 0x0312
 HOTKEY_ID = 1
+HOTKEY_LABEL = "Ctrl+Alt+T"
 
 
 def hotkey_thread(msg_q: queue.Queue):
-    """后台线程：注册 Ctrl+F5，收到热键消息后向主线程队列投递事件。"""
+    """后台线程：注册 Ctrl+Alt+T，收到热键消息后向主线程队列投递事件。"""
     user32 = ctypes.windll.user32
-    ok = user32.RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL, VK_F5)
+    ok = user32.RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL | MOD_ALT, VK_T)
     if not ok:
-        msg_q.put(("hotkey_fail", "Ctrl+F5 注册失败（可能被其他程序占用）"))
+        msg_q.put(("hotkey_fail", HOTKEY_LABEL + " 注册失败（可能被其他程序占用）"))
         return
     msg = wintypes.MSG()
     try:
@@ -79,7 +82,7 @@ class App:
 
         btns = tk.Frame(root)
         btns.pack(fill="x", padx=12, pady=(0, 10))
-        tk.Button(btns, text="隐藏窗口（Ctrl+F5）", command=self.hide).pack(side="left")
+        tk.Button(btns, text="隐藏窗口（Ctrl+Alt+T）", command=self.hide).pack(side="left")
         tk.Button(btns, text="刷新", command=lambda: self.refresh(True)).pack(side="left", padx=8)
         tk.Button(btns, text="退出程序", fg="#c00", command=self.quit).pack(side="right")
 
@@ -187,7 +190,7 @@ class App:
             txt += "  [%s]" % TYPE_LABEL.get(ev.get("type", "once"), ev.get("type"))
             tk.Label(row, text=txt, anchor="w", fg=color).pack(side="left", fill="x", expand=True)
         nxt = self.next_reminder_text(events, now)
-        self.set_sub("提醒：按事件 remindLead 提前（缺省 30/10 分钟各一次） · " + nxt + "\n数据：%s（每分钟自动重读，可外部编辑）\nCtrl+F5 显示/隐藏 · 关闭窗口仅隐藏，退出请点「退出程序」" % os.path.basename(self.data_path))
+        self.set_sub("提醒：按事件 remindLead 提前（缺省 30/10 分钟各一次） · " + nxt + "\n数据：%s（每分钟自动重读，可外部编辑）\nCtrl+Alt+T 显示/隐藏 · 关闭窗口仅隐藏，退出请点「退出程序」" % os.path.basename(self.data_path))
 
     def next_reminder_text(self, events, now):
         best = None

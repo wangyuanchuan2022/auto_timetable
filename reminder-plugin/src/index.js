@@ -1,4 +1,4 @@
-// dsh-timetable-reminder · DSH 插件宿主（参考 dsh-dafeiyu src/index.js 的结构）
+﻿// dsh-timetable-reminder · DSH 插件宿主（参考 dsh-dafeiyu src/index.js 的结构）
 // 职责：读取/监听设置，拉起并看护 Python helper 子进程，把配置以 JSONL 下发。
 import { createRequire } from 'node:module'
 import Schema from '@deepseek-ai/schemastery'
@@ -14,15 +14,15 @@ export const inject = ['settings']
 export const Config = Schema.object({
   enabled: Schema.boolean().default(true).description('启用当日日程提醒'),
   dataPath: Schema.string().default('D:/tools/auto_timetable/schedule.json').description('日程数据文件（schedule.json，可外部编辑）'),
-  hotkey: Schema.string().default('ctrl+f5').description('全局快捷键（如 ctrl+f5 / ctrl+alt+t，全局生效，切换主窗口显隐）'),
+  hotkey: Schema.string().default('ctrl+alt+t').description('全局快捷键（如 ctrl+alt+t，全局生效，切换主窗口显隐）'),
   leadMinutes: Schema.array(Schema.number()).default([30, 10]).description('提醒提前分钟数（每条日程每个点各提醒一次）'),
-  showOnStart: Schema.boolean().default(false).description('DSH 启动时显示主窗口（默认无头：仅驻留提醒弹窗，Ctrl+F5 或弹窗按钮唤出）'),
+  showOnStart: Schema.boolean().default(false).description('DSH 启动时显示主窗口（默认无头：仅驻留提醒弹窗，Ctrl+Alt+T 或弹窗按钮唤出）'),
 }).description('当日日程提醒：主窗口 + 提前弹窗 + 全局快捷键')
 
 const defaults = Object.freeze({
   enabled: true,
   dataPath: 'D:/tools/auto_timetable/schedule.json',
-  hotkey: 'ctrl+f5',
+  hotkey: 'ctrl+alt+t',
   leadMinutes: [30, 10],
   showOnStart: false,
 })
