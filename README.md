@@ -1,4 +1,4 @@
-﻿# auto_timetable · 智能工作表
+# auto_timetable · 智能工作表
 
 **一个 DSH（DeepSeek Harness）插件组项目**：包含两个宿主插件——`dsh-timetable-reminder`（桌面提醒，`reminder-plugin/`）、`dsh-timetable-mobile`（手机连接，`mobile-plugin/`）——以及一个工作台挂载页面 `schedule.html`（周视图），并附可独立运行的桌面/手机入口。**依赖 [dsh-worktable](https://github.com/Aisland-SJL/dsh-worktable) 插件**：工作台窗口容器负责 `schedule.html` 的挂载渲染（`widget-result.json` 产物清单）、静态托管与文件读写接口（`/api/worktable/*`，页面编辑写回 `schedule.json` 即经此通道）。
 
@@ -10,7 +10,9 @@
 | --- | --- | --- |
 | **桌面端提醒** | `reminder_app.py`（独立桌面应用）/ `start_reminder.bat` / `reminder-plugin/`（DSH 插件 `dsh-timetable-reminder`） | 主窗口列出当日日程，按事件 `remindLead` 提前弹窗提醒（`0` = 不提醒；留空回落默认 30/10 分钟双档）；后台常驻，全局快捷键 Ctrl+Alt+T 显隐；插件版另提供 Windows 原生 Toast（亚克力效果）唤醒弹窗，依赖 `reminder-plugin/runtime/helper.py` |
 | **手机连接** | `mobile-server.mjs` / `mobile.html` / `sw.js` / `mobile-plugin/`（DSH 插件 `dsh-timetable-mobile`） | 独立手机访问服务（默认端口 3190）：功能入口仅 **Cloudflare 隧道 HTTPS + 安全密码**（直连端口 3190 已全量收口——对所有来源只显示隧道地址引导页）：扫码打开手机页查看/编辑日程、Web Push 系统级提醒、直连电脑端 DSH AI 对话；插件版随 DSH web 启动/关闭自动拉起与回收，崩溃自动守护重启 |
-| **日程表智能** | `schedule.html` / `schedule.json` / `qrgen.js` / `manifest.webmanifest` / 图标 | 以「周」为单位的日程表交互页面（明暗主题自适应）：单击详情、双击编辑，「＋ 新建」/双击空白格新建事件，直接写回 `schedule.json`，并内嵌手机访问二维码面板 |
+| **日程表智能** | `schedule.html` / `schedule.json` / `qrgen.js` / `manifest.webmanifest` / 图标 | 以「周」为单位的日程表交互页面（明暗主题自适应）：单击详情、双击编辑，「＋ 新建」/双击空白格新建事件，直接写回 `schedule.json`，并内嵌手机访问二维码面板；支持事件级**例外日期（`skip` 停课/调休）与单双周（`weekPattern`）**、`termStart` **教学周徽标**、**历史归档查看/恢复**、**导入 JSON / 导出 JSON 备份 / 导出 ICS 日历**（未来 8 周展开，可直接订阅到系统日历） |
+
+> **手机端编辑**同样支持完整字段：名称/起止时间/地点/备注/提前提醒/截止日期，以及**例外日期与单双周**；对话框内可**两段式删除**事件。
 
 ## 安装与运行
 
@@ -256,12 +258,15 @@ node mobile-server.mjs --host 127.0.0.1   # 仅绑定本机（公网完全不监
 ```json
 {
   "_说明": "给人看的备注（如课表适用学期/周次），程序不解析",
-  "meta": { "title": "标题", "weekStart": 1 },
-  "events": [ ... ]
+  "meta": { "title": "标题", "weekStart": 1, "termStart": "2026-09-07" },
+  "events": [ ... ],
+  "archive": [ ... ]
 }
 ```
 
 `_说明`（可选）：写在文件顶部的备注（实际数据文件即用它登记学期/周次信息）；页面与手机端写入时原样保留，AI 修改也遵守保留约定，程序不解析其内容。
+
+`archive`（可选）：**过期归档节点**——过期满 3 个月的事件由 `mobile-server` 自动从 `events` 移入（保留原始字段 + `archivedAt` 归档时间戳）；不渲染、不提醒、不参与校验。周视图工具栏「历史」面板可查看并一键恢复到日程（恢复后请自行修改已过期的 `deadline`）。
 
 ### meta（可选）
 
@@ -270,6 +275,7 @@ node mobile-server.mjs --host 127.0.0.1   # 仅绑定本机（公网完全不监
 | `title` | 窗口标题 | `每周日程表` |
 | `weekStart` | 一周从周几开始：`1` 周一 / `0` 周日 | `1` |
 | `timeStart` / `timeEnd` | 固定时间范围（`"07:00"`、`"23:00"`）；不填则按日程自动适配 | 自动适配 |
+| `termStart` | 学期首周周一 `"YYYY-MM-DD"`（可选）：配置后周视图标题栏显示「第 N 教学周」徽标 | 不显示 |
 
 ### 事件通用字段
 
@@ -281,8 +287,10 @@ node mobile-server.mjs --host 127.0.0.1   # 仅绑定本机（公网完全不监
 | `location` | 地点（可选） |
 | `color` | 十六进制色值，如 `"#4f8ef7"`（可选，缺省按类型配色） |
 | `note` | 备注（可选） |
-| `remindLead` | 手机端提前提醒分钟数（可选，默认 `20`；`0` = 不提醒） |
-| `deadline` | 截止日期 `"YYYY-MM-DD"`（可选）：**到该日（含）为止生效**——之后不再渲染、不再提醒；数据并不立即删除，`mobile-server` 会在**过期满 3 个月**后自动从 `schedule.json` 清除（启动 + 每 6 小时清扫一次）。`once` 型缺省即其 `date`；`custom` 型缺省对齐 `repeat.until`。三个编辑入口（周视图编辑器 / 手机端对话框 / AI 对话）均可改 |
+| `remindLead` | 提前提醒分钟数（可选，默认 `20`；`0` = 不提醒）——手机推送/桌面提醒/服务端判定三端统一语义 |
+| `deadline` | 截止日期 `"YYYY-MM-DD"`（可选）：**到该日（含）为止生效**——之后不再渲染、不再提醒；数据不删除，`mobile-server` 会在**过期满 3 个月**后自动把事件**移入顶层 `archive` 归档节点**（附 `archivedAt` 时间戳，不渲染不提醒，可在周视图「历史」面板查看/恢复）。`once` 型缺省即其 `date`；`custom` 型缺省对齐 `repeat.until`。三个编辑入口（周视图编辑器 / 手机端对话框 / AI 对话）均可改 |
+| `skip` | 例外日期列表 `["YYYY-MM-DD", …]`（可选，全类型生效）：**停课/调休日**——事件在这些日期不发生（不渲染、不提醒），无需删除整个事件。判定顺序：`deadline` → `skip` → 原重复规则。周视图与手机端对话框均可编辑（多日期用逗号/空格分隔） |
+| `weekPattern` | 单双周 `{ "start": "YYYY-MM-DD", "odd": true \| false }`（可选，仅 `weekly` 型）：以 `start` 所在周为第 1 教学周，`odd:true` 仅单数周（1/3/5…）发生、`false` 仅双数周（2/4/6…）；与 `skip` 可共存。周视图与手机端对话框均可编辑（`start` 缺省取 `meta.termStart`，无则本周一） |
 
 ### 三种组件类型
 
