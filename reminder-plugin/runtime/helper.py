@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """dsh-timetable-reminder · Python helper（参考 dsh-dafeiyu runtime/helper.py 的进程模型）
 
 DSH 插件宿主拥有本进程：stdin 按行收 JSON 命令，stdout 按行回 JSON 应答。
@@ -242,6 +242,11 @@ def try_apply_acrylic(window):
     注：Win11 的 DWMWA_SYSTEM_BACKDROP_TYPE（38，Win 键面板同源材质）对 GDI
     窗口无视觉效果——它要求 DirectComposition 内容（像素带 alpha），而 tkinter
     每个像素都不透明，会直接盖住材质，API 却仍返回成功。故不采用。"""
+    if not accent_api_alive():
+        # Windows 更新后 SetWindowCompositionAttribute 可能整体失效（返回成功但不渲染，
+        # Win 26200 实证：GRADIENT 纯红也不上屏）——黑底无亚克力替换=Toast 黑屏，
+        # 必须走不透明卡片回退。
+        return False
     hwnd = apply_borderless_frame(window)
     if hwnd:
         if set_acrylic_blur(hwnd, tint=0xD9202020):
@@ -259,6 +264,88 @@ def try_apply_acrylic(window):
         return True
     except Exception:
         return False
+
+
+# ---- SetWindowCompositionAttribute 存活探测（进程内缓存一次） ----
+_ACCENT_API_STATE = {"state": None}  # None=未测 / True=活着 / False=失效
+
+
+def _make_probe_windows():
+    """造一对探针窗口（白底 + 红色 GRADIENT 覆盖窗），返回两 hwnd。"""
+    user32 = ctypes.windll.user32
+    holder = tk.Toplevel()
+    holder.withdraw()
+    bg = tk.Toplevel(holder)
+    bg.overrideredirect(True)
+    bg.geometry("+%d+%d" % (max(user32.GetSystemMetrics(0) - 240, 40), 80))
+    bg.geometry("160x120")
+    bg.configure(bg="#FFFFFF")
+    bg.attributes("-topmost", True)
+    fg = tk.Toplevel(holder)
+    fg.overrideredirect(True)
+    fg.geometry("+%d+%d" % (max(user32.GetSystemMetrics(0) - 220, 60), 100))
+    fg.geometry("120x80")
+    fg.configure(bg="#000000")
+    fg.attributes("-topmost", True)
+    bg.update_idletasks(); bg.update()
+    fg.update_idletasks(); fg.update()
+    hb = user32.GetParent(bg.winfo_id())
+    hf = user32.GetParent(fg.winfo_id())
+    return holder, bg, fg, hb, hf
+
+
+def accent_api_alive(force=False):
+    """探测 SetWindowCompositionAttribute 是否真的在渲染（而非仅返回成功）。
+
+    方法：纯白底上叠一个 ACCENT_ENABLE_GRADIENT(1) 不透明纯红窗——GRADIENT 是
+    最古老的 accent 状态，若连它都不渲染（采样仍白），说明整个未文档化 API 在
+    当前 Windows 构建上已失效（亚克力必然同样失效）。结果进程内缓存。
+    沙箱/无桌面环境下 GetPixel 失败时按「存活」处理（保持旧行为）。"""
+    if _ACCENT_API_STATE["state"] is not None and not force:
+        return _ACCENT_API_STATE["state"]
+    state = True  # 探测失败按存活处理（与历史行为一致）
+    try:
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        holder, bg, fg, hb, hf = _make_probe_windows()
+        try:
+            # 红：A=FF R=FF → GradientColor 字节序 ABGR → 0xFF0000FF
+            pol = _ACCENT_POLICY(1, 0, 0xFF0000FF, 0)
+            data = _WCA_DATA(19, ctypes.pointer(pol), ctypes.sizeof(pol))
+            ok = user32.SetWindowCompositionAttribute(hf, ctypes.byref(data))
+            if ok:
+                fg.update()
+                _time.sleep(0.35)
+                fg.update()
+                hdc = user32.GetDC(0)
+                try:
+                    # 采样红窗中心（物理坐标）
+                    left = fg.winfo_rootx()
+                    top = fg.winfo_rooty()
+                    px = gdi32.GetPixel(hdc, left + fg.winfo_width() // 2,
+                                         top + fg.winfo_height() // 2)
+                finally:
+                    user32.ReleaseDC(0, hdc)
+                r = px & 0xFF
+                g = (px >> 8) & 0xFF
+                b = (px >> 16) & 0xFF
+                # 白底+黑窗都被红色 GRADIENT 覆盖才认为活着（采样到白/黑=没渲染）
+                if r > 180 and g < 90 and b < 90:
+                    state = True
+                else:
+                    state = False
+        finally:
+            try:
+                holder.destroy()
+            except Exception:
+                pass
+    except Exception:
+        state = True
+    _ACCENT_API_STATE["state"] = state
+    if not state:
+        print("timetable helper: SetWindowCompositionAttribute 已失效（本 Windows 构建不渲染 accent），"
+              "Toast 回退为不透明深色卡片", file=sys.stderr)
+    return state
 
 
 # ---- Win11 系统 backdrop（Shell 同源材质） ----
@@ -911,7 +998,12 @@ class App:
             os.path.basename(str(self.cfg.get("dataPath"))))
         if self.hotkey_error:
             text += "\n（热键 %s 注册失败，可能被其他程序占用）" % self.hotkey_error
-        self.sub.set(text)
+        try:
+            self.sub.set(text)
+        except Exception:
+            # maliang Label 在 zoom 重建时序下可能短暂缺内部结构（texts）——本次静默跳过，
+            # 下一次 pump/refresh 会用新实例再 set，不影响功能
+            pass
 
     # ---- 窗口切换 ----
     def is_visible(self):
