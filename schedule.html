@@ -563,11 +563,23 @@
 
     // ---------- 点击就地编辑 + 持久化 ----------
     // 数据文件相对解析：① URL 参数 ?data= 优先（可带路径）；② 默认 schedule.json（相对页面同目录）。
-    // 与 loadData() 的读取候选保持同一来源，写回通道也用它定位文件。
+    // 读取与写回共用同一目标。注意：写接口（/api/worktable/write）对「相对路径」按宿主进程
+    // cwd 解析——工作台宿主重启后 cwd 漂移曾把保存写进用户主目录的游离 schedule.json
+    // （真文件从未更新，事件"保存成功"后消失）。故页面经 worktable 站点路由打开时，
+    // 必须从 /api/worktable/site/<工作区绝对路径>/ 反推绝对 SAVE_PATH 钉死写入目标。
     var SAVE_PATH = (function () {
       var q = null;
       try { q = new URLSearchParams(location.search).get('data'); } catch (e) {}
-      return q || 'schedule.json';
+      var file = q || 'schedule.json';
+      if (/^[a-zA-Z]:[\\/]/.test(file)) return file; // ?data= 已给绝对路径（含盘符）
+      try {
+        var m = String(location.pathname).match(/^\/api\/worktable\/site\/([^/]+)\//);
+        if (m) {
+          var root = decodeURIComponent(m[1]).replace(/[\\/]+$/, '');
+          return root + '/' + file.replace(/^\/+/, '');
+        }
+      } catch (e) {}
+      return file; // 其他来源：维持相对路径（同源语义下由服务端解析）
     })();
     try { window.TT_SAVE_PATH = SAVE_PATH; } catch (e) {} // 供下方手机面板脚本推导工作目录（跨 IIFE）
     var BACKUP_KEY = 'tt-schedule-backup';
@@ -587,22 +599,27 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: SAVE_PATH, content: json })
       }).then(function (res) {
-        if (!res || !res.ok) throw new Error('write failed');
+        if (!res || !res.ok) {
+          // 保存失败必须明确报错（含 HTTP 状态码）——绝不装作成功
+          throw new Error((res && res.status) ? ('HTTP ' + res.status) : '写入服务无响应');
+        }
         // 写后读回校验，确认内容完整落盘（防止写入竞态导致文件截断）
         var vurl = loadedUrl || 'schedule.json';
         return fetch(vurl, { cache: 'no-store' }).then(function (r) {
-          if (!r || !r.ok) throw new Error('verify failed');
+          if (!r || !r.ok) throw new Error('写后回读失败');
           return r.text();
         }).then(function (txt) {
           var ok = false;
           try { ok = !!txt && txt.length >= 10 && !!JSON.parse(txt); } catch (e) {}
-          if (!ok) throw new Error('verify failed');
+          if (!ok) throw new Error('写后回读内容异常');
           try { localStorage.removeItem(BACKUP_KEY); } catch (e) {}
-          setSaveStatus('已保存到 schedule.json', true);
+          setSaveStatus('已保存到 ' + (String(SAVE_PATH).split(/[\\/]/).pop() || 'schedule.json'), true);
         });
-      }).catch(function () {
+      }).catch(function (err) {
+        // 数据仍兜底进 localStorage（防丢），但状态徽标必须明示失败原因——
+        // 此前静默回落「本地备份」曾让保存失败被误认为成功，事件下次刷新即消失。
         try { localStorage.setItem(BACKUP_KEY, json); } catch (e) {}
-        setSaveStatus('已存本地备份（服务端写入失败）', false);
+        setSaveStatus('保存失败：' + (err && err.message ? err.message : '未知错误') + '（已存本地备份）', false);
       });
     }
 

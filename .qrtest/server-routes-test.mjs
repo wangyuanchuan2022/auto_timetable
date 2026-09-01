@@ -171,5 +171,85 @@ check('G4 isPurgeableEvent：deadline / once date / custom until 三来源', (()
 })());
 check('G5 COOKIE_NAME 为 v2 会话 Cookie', COOKIE_NAME === 'tt_pin_v2');
 
+// ========== H. POST /api/worktable/write 兼容路由（dispatcher 级端到端） ==========
+// 背景：schedule.html 固定 POST /api/worktable/write 保存——在 mobile-server 源打开时由此
+// 路由承接。安全契约：body.path 一律忽略（防「任意路径写入」端点暴露公网隧道）、guardPin
+// 鉴权、校验/原子写与 POST /api/schedule 完全同一管线。
+section('H) /api/worktable/write 兼容路由');
+{
+  const { createRouteDispatcher } = await import('../server-routes.mjs');
+  const TTOccur = (await import('../occur.js')).default;
+  const FAKE_SCHEDULE_PATH = 'S:/fake-unit/schedule.json';
+  const writes = [];
+  const noop = () => {};
+  const dispatch = createRouteDispatcher({
+    port: 39191, viaTunnel: true,
+    HERE: 'S:/fake-unit', MOBILE_HTML_PATH: 'S:/fake-unit/mobile.html',
+    SCHEDULE_PATH: FAKE_SCHEDULE_PATH, OCCUR_JS_PATH: 'S:/fake-unit/occur.js',
+    MOBILE_APP_JS_PATH: 'S:/fake-unit/mobile-app.js',
+    loadSettings: async () => ({ pinHash: hashed, sessions: [] }),
+    saveSettings: noop, getTunnelUrl: () => null, getTunnelPort: () => null,
+    selectLanIPv4: () => null, chatBusy: () => false,
+    ensureChatSession: noop, chatWithDsh: noop, chatHistoryMessages: () => [],
+    resetChatSession: noop, dshRpc: noop, DSH_API: 'http://127.0.0.1:3080',
+    buildChatContent: () => ({}), MUX: {},
+    watchSessionStream: noop, sseKeepalive: noop, sseAdmit: () => true,
+    webpush: null, ensureVapid: noop, loadSubs: () => [], saveSubs: noop, safePushEndpoint: noop,
+    atomicWriteFile: async (p, c) => { writes.push({ path: p, content: c }); },
+    TTOccur,
+  });
+  const mkPostReq = (url, headers, body) => {
+    const ls = {};
+    const req = {
+      method: 'POST', url, headers,
+      socket: { remoteAddress: '127.0.0.1' },
+      on(ev, fn) { (ls[ev] ||= []).push(fn); return req; },
+      destroy() {},
+    };
+    process.nextTick(() => {
+      (ls.data || []).forEach((f) => f(Buffer.from(body)));
+      (ls.end || []).forEach((f) => f());
+    });
+    return req;
+  };
+  const post = async (url, headers, body) => {
+    const res = mkRes();
+    await dispatch(mkPostReq(url, headers, body), res);
+    return res;
+  };
+  const lbPin = { host: '127.0.0.1:39191', 'x-tt-pin': PIN, 'content-type': 'application/json' };
+  const validDoc = JSON.stringify({ meta: { title: 'unit' }, events: [
+    { type: 'once', id: 'e1', title: '测试', start: '08:00', end: '09:00', date: '2026-09-01', deadline: '2026-09-01' },
+  ] });
+
+  resetRate();
+  const r1 = await post('/api/worktable/write', { host: '127.0.0.1:39191', 'content-type': 'application/json' }, JSON.stringify({ path: 'x', content: validDoc }));
+  check('H1 无凭据：401 且不写盘', r1.status === 401 && writes.length === 0, `status=${r1.status}`);
+
+  const r2 = await post('/api/worktable/write', lbPin, JSON.stringify({ path: 'C:/Windows/Temp/evil.json', content: validDoc }));
+  check('H2 body.path 被忽略：只写 SCHEDULE_PATH、不落攻击者路径',
+    r2.status === 200 && writes.length === 1 && writes[0].path === FAKE_SCHEDULE_PATH
+    && writes[0].content === validDoc && !writes.some((w) => w.path.includes('evil')),
+    `status=${r2.status} writes=${JSON.stringify(writes.map((w) => w.path))}`);
+
+  const badDoc = JSON.stringify({ events: [{ type: 'custom', id: 'x', title: '无repeat', start: '08:00', end: '09:00' }] });
+  writes.length = 0;
+  const r3 = await post('/api/worktable/write', lbPin, JSON.stringify({ path: 'x', content: badDoc }));
+  check('H3 结构错误：400 明细且不写盘', r3.status === 400 && JSON.parse(r3.body).problems?.length > 0 && writes.length === 0, `status=${r3.status}`);
+
+  writes.length = 0;
+  const r4 = await post('/api/worktable/write', lbPin, JSON.stringify({ path: 'x', content: 'not-json{{{', }));
+  check('H4 非法 JSON：400 invalid schedule', r4.status === 400 && JSON.parse(r4.body).error === 'invalid schedule', `status=${r4.status}`);
+
+  const r5 = await post('/api/worktable/write', lbPin, JSON.stringify({ path: 'x' }));
+  check('H5 缺 content：400 missing content', r5.status === 400 && JSON.parse(r5.body).error === 'missing content', `status=${r5.status}`);
+
+  writes.length = 0;
+  const r6 = await post('/api/schedule', lbPin, JSON.stringify({ content: validDoc }));
+  check('H6 POST /api/schedule 回归：共用管线仍 200 且写同一目标',
+    r6.status === 200 && writes.length === 1 && writes[0].path === FAKE_SCHEDULE_PATH && writes[0].content === validDoc,
+    `status=${r6.status} writes=${writes.length}`);
+}
+
 console.log(`\nserver-routes.mjs\n  通过 ${pass} / 失败 ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

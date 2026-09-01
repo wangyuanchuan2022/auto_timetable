@@ -647,6 +647,25 @@ export function createRouteDispatcher(deps) {
   }
 
   // ---- 分组 handler：schedule 读写 ----
+
+  // 写入管线：POST /api/schedule 与兼容路由 /api/worktable/write 共用同一实现
+  // （结构校验 400 明细 + 原子写 atomicWriteFile，目标恒为 SCHEDULE_PATH），防双源漂移。
+  async function writeScheduleContent(res, content) {
+    if (typeof content !== 'string') return sendJSON(res, 400, { ok: false, error: 'missing content' });
+    let parsed = null;
+    try { parsed = JSON.parse(content); } catch { /* 非法 JSON → invalid schedule */ }
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.events)) {
+      return sendJSON(res, 400, { ok: false, error: 'invalid schedule' });
+    }
+    // P1-2 逐事件结构校验：存在结构性错误（如 custom 缺 repeat、日期格式非法）→ 400 返回明细，不写盘
+    const problems = TTOccur.validateSchedule(parsed);
+    if (problems.length) {
+      return sendJSON(res, 400, { ok: false, error: '日程数据校验失败（未写盘）', problems });
+    }
+    await atomicWriteFile(SCHEDULE_PATH, content);
+    return sendJSON(res, 200, { ok: true });
+  }
+
   async function handleSchedule(req, res, pathname, settings) {
     if (req.method === 'GET' && pathname === '/api/schedule') {
       if (!guardPin(req, res, settings)) return true;
@@ -656,18 +675,15 @@ export function createRouteDispatcher(deps) {
     if (req.method === 'POST' && pathname === '/api/schedule') {
       if (!guardPin(req, res, settings)) return true;
       const body = JSON.parse(await readBody(req));
-      if (typeof body.content !== 'string') return sendJSON(res, 400, { ok: false, error: 'missing content' });
-      const parsed = JSON.parse(body.content); // 必须是合法 JSON 才写盘
-      if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.events)) {
-        return sendJSON(res, 400, { ok: false, error: 'invalid schedule' });
-      }
-      // P1-2 逐事件结构校验：存在结构性错误（如 custom 缺 repeat、日期格式非法）→ 400 返回明细，不写盘
-      const problems = TTOccur.validateSchedule(parsed);
-      if (problems.length) {
-        return sendJSON(res, 400, { ok: false, error: '日程数据校验失败（未写盘）', problems });
-      }
-      await atomicWriteFile(SCHEDULE_PATH, body.content);
-      return sendJSON(res, 200, { ok: true });
+      return writeScheduleContent(res, body.content);
+    }
+    if (req.method === 'POST' && pathname === '/api/worktable/write') {
+      // 兼容路由：schedule.html 固定 POST 此路径保存——在 mobile-server 源（隧道/手机端）
+      // 打开时由此承接。安全红线：body.path 一律忽略（该端点挂在公网隧道后面，绝不做
+      // 「任意路径写入」），只写 SCHEDULE_PATH；鉴权 guardPin 与写入管线同 /api/schedule。
+      if (!guardPin(req, res, settings)) return true;
+      const body = JSON.parse(await readBody(req));
+      return writeScheduleContent(res, body.content);
     }
     return false;
   }
