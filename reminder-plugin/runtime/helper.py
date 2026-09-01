@@ -26,7 +26,6 @@ import argparse
 import ctypes
 import ctypes.wintypes as wintypes
 import json
-import math
 import os
 import queue
 import sys
@@ -60,7 +59,6 @@ C_MUTE = "#9A9A9A"
 C_ACCENT = "#4CC2FF"    # Win11 强调色
 C_ACCENT_BT = "#0078D4" # 主按钮
 C_DANGER = "#FF7A70"
-MAGIC = "#010203"       # 透明色（回退模式的圆角实现）
 TASKBAR = 56            # 底部任务栏预留
 
 GLASS_ALPHA = 0.92      # 回退模式主窗口半透明度
@@ -80,9 +78,8 @@ FS_TITLE = 22     # 页面主标题（bold）
 FS_DLG_CAPTION = 15    # 辅助行：应用名 / 地点
 FS_DLG_BODY = 16.5     # 正文：时间行
 FS_DLG_TITLE = 16.5    # 弹窗标题（bold）
-# 圆角：Microsoft Learn《Geometry in Windows 11》窗口/浮层 8px
-DLG_RADIUS = 8
-# 回退底色：WinUI Acrylic 关闭透明时的实心填充（深色 ≈ #2B2B2B，不透明）
+# 回退底色：WinUI Acrylic 关闭透明时的实心填充（深色 ≈ #2B2B2B，不透明）。
+# 注：圆角由 DWM「有框无边栏」窗口框架提供（apply_borderless_frame），不再自绘。
 DLG_FALLBACK_BG = "#2B2B2B"
 
 # ---------------- 高 DPI（防模糊） ----------------
@@ -270,6 +267,17 @@ def try_apply_acrylic(window):
 _ACCENT_API_STATE = {"state": None}  # None=未测 / True=活着 / False=失效
 
 
+def _diag(line):
+    """生产环境取证：探测/Toast 分支决策追加写日志（只诊断用，异常静默）。"""
+    try:
+        p = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), ".qrtest", "toast-diag.log")
+        with open(p, "a", encoding="utf-8") as f:
+            f.write("%s %s\n" % (datetime.now().strftime("%m-%d %H:%M:%S"), line))
+    except Exception:
+        pass
+
+
 def _make_probe_windows():
     """造一对探针窗口（白底 + 红色 GRADIENT 覆盖窗），返回两 hwnd。"""
     user32 = ctypes.windll.user32
@@ -334,13 +342,16 @@ def accent_api_alive(force=False):
                     state = True
                 else:
                     state = False
+                _diag("probe ok=%s px=0x%08X rgb=(%d,%d,%d) → alive=%s" % (
+                    bool(ok), px & 0xFFFFFFFF if px >= 0 else px, r, g, b, state))
         finally:
             try:
                 holder.destroy()
             except Exception:
                 pass
-    except Exception:
+    except Exception as e:
         state = True
+        _diag("probe EXCEPTION %r → alive=True(默认)" % (e,))
     _ACCENT_API_STATE["state"] = state
     if not state:
         print("timetable helper: SetWindowCompositionAttribute 已失效（本 Windows 构建不渲染 accent），"
@@ -403,22 +414,6 @@ def apply_borderless_frame(window):
     except Exception:
         return None
 
-
-def round_rect(cv, x1, y1, x2, y2, r, **kw):
-    """精确圆角矩形：每角按圆弧采样多边形（非 smooth 样条近似），
-    配合 -transparentcolor 抠角，圆角肉眼与系统 8px 一致。"""
-    pts = []
-
-    def arc(cx, cy, a0, a1, steps=8):
-        for i in range(steps + 1):
-            a = math.pi * (a0 + (a1 - a0) * i / steps) / 180.0
-            pts.extend((cx + r * math.cos(a), cy + r * math.sin(a)))
-
-    arc(x1 + r, y1 + r, 180, 270)   # 左上
-    arc(x2 - r, y1 + r, 270, 360)   # 右上
-    arc(x2 - r, y2 - r, 0, 90)      # 右下
-    arc(x1 + r, y2 - r, 90, 180)    # 左下
-    return cv.create_polygon(pts, **kw)
 
 # ---------------- Win32 全局快捷键 ----------------
 MOD_ALT = 0x0001
@@ -552,33 +547,43 @@ class Toast:
         win.attributes("-topmost", True)
 
         # 系统 backdrop 内部会做 overrideredirect(False)+有框无边栏改造；
-        # 仅在材质全部不可用时才走 overrideredirect 抠角回退
+        # 亚克力不可用时同样走「有框无边栏」——DWM 系统圆角/投影/1px 边框，
+        # 整窗即卡片，不依赖任何透明 API。
+        # 不再使用 -transparentcolor 抠角：Win11 26200 实证 color-key 与 accent
+        # API 同步失效（整窗显示 MAGIC 近黑底 = 「全黑直角框」线上事故）。
         self.acrylic = try_apply_acrylic(win)
-        base = "#000000" if self.acrylic else MAGIC  # 控件芯片色：黑=透出材质
+        _diag("Toast '%s' acrylic=%s（True=黑底材质分支 / False=深色卡片回退）" % (
+            str(ev.get("title", ""))[:20], self.acrylic))
+        base = "#000000" if self.acrylic else DLG_FALLBACK_BG  # 控件芯片与底同色
         if not self.acrylic:
-            win.overrideredirect(True)
-            win.attributes("-topmost", True)
-            # 磨砂不可用 → WinUI 规范回退：不透明实心填充（非半透明），透明色仅用于抠角
-            win.attributes("-transparentcolor", MAGIC)
+            # 磨砂不可用 → WinUI 规范回退：不透明实心深色卡片（非半透明）。
+            # 底色与窗口 bg 同色（maliang dark 主题 #202020）：THICKFRAME 改造后
+            # 客户区外缘 1-2px 由窗口 bg 露出，两色不一致会出现"描边"式色差。
+            win.configure(bg=DLG_FALLBACK_BG)
+            if apply_borderless_frame(win) is None:
+                # 兜底：borderless 改造失败（极少数环境）→ 原生无边框直角窗
+                win.overrideredirect(True)
+                win.attributes("-topmost", True)
         else:
             # 透明度：材质模式下窗口 alpha=1.0，层次感由 DWM 材质提供
             try_dwm_round_corners(win)  # 系统圆角（Win11 浮层规范 8px）
             # 窗口完成映射后再补设一次（部分机型首次设置早于映射会被忽略）
             win.after(120, lambda: self.win.winfo_exists() and try_dwm_round_corners(self.win))
 
-        # auto_update=False：阻止 maliang 主题管理器把画布重绘成 #202020，
-        # 否则不透明底色会盖住亚克力模糊
+        # auto_update=False：阻止 maliang 主题管理器把画布重绘成主题默认 #202020
+        # （回退分支曾被改写：canvas=#202020 vs 文字芯片=#2B2B2B 两种灰并存，
+        # 亚克力分支则是防重绘盖住模糊）——颜色一律显式指定
         cv = self.cv = ma.Canvas(win, expand="xy", bg=base, highlightthickness=0, bd=0,
-                                 auto_update=not self.acrylic)
+                                 auto_update=False)
         if self.acrylic:
             cv.configure(bg="#000000")
         chip = base  # 文字芯片与底同色 → 隐形，仅文字可见
+        # 布局（关键）：maliang Canvas 继承 tk.Canvas，expand 参数只服务于
+        # zoom 缩放，不提供布局——不显式 place 时恒为 1×1，文字/进度条全部
+        # 不显示（Win26200 线上事故「有圆角的深灰矩形无任何内容」根因）。
+        cv.place(x=0, y=0, width=width, height=height)
 
         p = sc(PAD)
-        if not self.acrylic:  # 回退模式：自绘圆角卡片（Geometry 规范 8px 圆角）
-            round_rect(cv, 1, 1, width - 1, height - 1, sc(DLG_RADIUS),
-                       fill=DLG_FALLBACK_BG, outline=C_BORDER)
-            chip = DLG_FALLBACK_BG
 
         # 头部（Caption 层级）：应用名 + 提前量（无按钮，倒计时结束自动收起）
         mlabel(cv, (p, zsc(12)), text="⏱", fg=C_ACCENT, bg=chip, size_text=FS_DLG_CAPTION)
@@ -833,8 +838,12 @@ class App:
         target_y = None
         try:
             target_y = t.win.winfo_y()
+            if target_y <= 0:  # 未映射（旧 overrideredirect 时序）→ 用布局目标位兜底
+                raise ValueError
         except Exception:
-            pass
+            # layout_toasts 已把 Toast 摆到目标 y：屏幕底 - 任务栏 - 12 - 卡片高
+            sh = self.root.winfo_screenheight()
+            target_y = sh - sc(TASKBAR) - sc(12) - t.height
         if target_y is None or target_y <= 0:
             return
 
