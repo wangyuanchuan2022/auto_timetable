@@ -26,6 +26,22 @@
       --tt-today-bg: rgba(57,100,254,.06);
       --tt-accent: #3964fe;
     }
+    /* —— 原生下拉/日期控件弹层配色兜底 ——
+       深色模式下 Chromium 的 select 弹出列表（option）与日期日历不一定跟随 :root 的
+       color-scheme，会按 UA 默认渲染成白色。与 dsh-worktable 自身皮肤同款做法：
+       option 显式上色 + 把 color-scheme 钉在控件上，随 data-tt-theme 明暗切换。 */
+    select.dshell-input, input.dshell-input, textarea.dshell-input { color-scheme: dark; }
+    select.dshell-input option {
+      background-color: var(--dsw-alias-bg-base, #0b0e14);
+      color: var(--dsw-alias-label-primary, #e6e8eb);
+    }
+    html[data-tt-theme='light'] select.dshell-input,
+    html[data-tt-theme='light'] input.dshell-input,
+    html[data-tt-theme='light'] textarea.dshell-input { color-scheme: light; }
+    html[data-tt-theme='light'] select.dshell-input option {
+      background-color: var(--dsw-alias-bg-base, #f9fafb);
+      color: var(--dsw-alias-label-primary, #0f1115);
+    }
     /* 主题切换平滑过渡（尊重减少动态偏好） */
     @media (prefers-reduced-motion: no-preference) {
       html { transition: background-color .25s ease, color .25s ease; }
