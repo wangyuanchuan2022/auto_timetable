@@ -64,6 +64,11 @@ const occurTable = [
   // skip + weekPattern 组合：单双周允许但 skip 拦截
   { name: 'skip + weekPattern 组合：第 3 周允许但 skip 拦截', ev: { type: 'weekly', weekday: 1, start: '08:00', end: '09:00', weekPattern: { start: '2026-09-14', odd: true }, skip: ['2026-09-28'] }, day: '2026-09-28', want: false },
   { name: 'skip + weekPattern 组合：skip 未命中且周允许 → 发生', ev: { type: 'weekly', weekday: 1, start: '08:00', end: '09:00', weekPattern: { start: '2026-09-14', odd: true }, skip: ['2026-09-21'] }, day: '2026-09-28', want: true },
+  // task 长周期任务（无起止时刻）：仅截止当日「发生」（侧栏/单日视图/截止日标记用，不进时段网格）
+  { name: 'task 截止当日发生', ev: { type: 'task', title: '报告', deadline: '2026-09-16' }, day: '2026-09-16', want: true },
+  { name: 'task 截止前不发生', ev: { type: 'task', title: '报告', deadline: '2026-09-16' }, day: '2026-09-15', want: false },
+  { name: 'task 截止后不发生', ev: { type: 'task', title: '报告', deadline: '2026-09-16' }, day: '2026-09-17', want: false },
+  { name: 'task 缺 deadline 永不发生', ev: { type: 'task', title: '报告' }, day: '2026-09-16', want: false },
 ];
 
 // —— leadMinutes / parseHHMM 用例表 ——
@@ -108,6 +113,11 @@ const validateCases = [
   { name: 'weekPattern 用于非 weekly 报错', ev: { type: 'once', title: 'X', date: '2026-08-28', start: '09:00', end: '10:00', weekPattern: { start: '2026-09-14', odd: true } }, wantErr: 1 },
   { name: 'weekPattern.start 非法报错', ev: { type: 'weekly', title: 'X', weekday: 1, start: '08:00', end: '09:00', weekPattern: { start: 'bad', odd: true } }, wantErr: 1 },
   { name: 'weekPattern 合法通过', ev: { type: 'weekly', title: 'X', weekday: 1, start: '08:00', end: '09:00', weekPattern: { start: '2026-09-14', odd: true } }, wantErr: 0 },
+  // task 长周期任务：无需 start/end，deadline = 必须完成日（必填）
+  { name: '合法 task 通过（无需 start/end）', ev: { type: 'task', title: '报告', deadline: '2026-12-20' }, wantErr: 0 },
+  { name: 'task 缺 deadline 报错', ev: { type: 'task', title: '报告' }, wantErr: 1 },
+  { name: 'task deadline 格式非法报错', ev: { type: 'task', title: '报告', deadline: '2026/12/20' }, wantErr: 1 },
+  { name: 'task 带 weekPattern 报错（仅 weekly）', ev: { type: 'task', title: '报告', deadline: '2026-12-20', weekPattern: { start: '2026-09-14', odd: true } }, wantErr: 1 },
 ];
 
 // —— 对拍模式：输出 occursOn 用例表 JSON（day 转 ISO 串；Python 侧 timetable_core.occurs_on 同表跑） ——
@@ -155,6 +165,8 @@ t('once 缺 deadline 用 date 判定', TTOccur.isPurgeable({ type: 'once', date:
 t('custom 缺 deadline 用 repeat.until 判定', TTOccur.isPurgeable({ type: 'custom', repeat: { until: '2026-05-31' } }, '2026-08-31'), true);
 t('无任何截止依据不可归档（weekly 长期课程）', TTOccur.isPurgeable({ type: 'weekly', weekday: 1 }, '2026-08-31'), false);
 t('deadline 晚于 cutoff 不可归档', TTOccur.isPurgeable({ deadline: '2027-01-17' }, '2026-08-31'), false);
+t('task 过期可归档（deadline 即必须完成日）', TTOccur.isPurgeable({ type: 'task', deadline: '2026-05-01' }, '2026-08-31'), true);
+t('task 未过期不可归档', TTOccur.isPurgeable({ type: 'task', deadline: '2026-12-20' }, '2026-08-31'), false);
 
 console.log('7) archiveFor（归档纯函数：不丢数据、不改入参）');
 const NOW = Date.parse('2026-08-31T12:00:00Z');

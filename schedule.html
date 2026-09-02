@@ -51,8 +51,9 @@
     .tt-lg-dot { width:9px; height:9px; border-radius:3px; flex:none; }
 
     .tt-grid-wrap { border:1px solid var(--dsw-alias-border-l1,#262b36); border-radius:10px; overflow:auto; max-height:calc(100vh - 330px); }
-    .tt-grid { min-width:940px; }
-    .tt-headrow, .tt-bodyrow { display:grid; grid-template-columns:56px repeat(7, minmax(118px,1fr)); }
+    .tt-grid { min-width:1150px; }
+    /* 第 9 列（210px）= 截止任务侧栏：长周期必完成任务集中在此，不与普通事件混排 */
+    .tt-headrow, .tt-bodyrow { display:grid; grid-template-columns:56px repeat(7, minmax(118px,1fr)) 210px; }
     .tt-headrow { position:sticky; top:0; z-index:7; background-color:var(--dsw-alias-bg-base,#0b0e14); border-bottom:1px solid var(--dsw-alias-border-l1,#262b36); }
     .tt-corner { border-right:1px solid var(--dsw-alias-border-l1,#262b36); }
     .tt-dayhead { padding:6px 2px; text-align:center; border-left:1px solid var(--dsw-alias-border-l1,#262b36); }
@@ -75,6 +76,18 @@
 
     .tt-now { position:absolute; left:0; right:0; height:2px; background:#f85149; z-index:4; pointer-events:none; }
     .tt-now::before { content:''; position:absolute; left:-3px; top:-3px; width:8px; height:8px; border-radius:50%; background:#f85149; }
+    /* —— 截止任务侧栏（第 9 列）—— */
+    .tt-taskhead { padding:6px 8px; text-align:center; border-left:1px solid var(--dsw-alias-border-l1,#262b36); font-size:12px; font-weight:700; color:#f0883e; background-color:var(--dsw-alias-fill-l1,rgba(255,255,255,.02)); }
+    .tt-taskcol { position:relative; border-left:1px solid var(--dsw-alias-border-l1,#262b36); box-sizing:border-box; overflow-y:auto; padding:6px; display:flex; flex-direction:column; gap:6px; }
+    .tt-task { flex:none; border:1px solid var(--dsw-alias-border-l1,#262b36); border-left:3px solid #f0883e; border-radius:6px; padding:5px 7px; font-size:11px; line-height:1.4; cursor:pointer; overflow:hidden; }
+    .tt-task:hover { filter:brightness(1.2); }
+    .tt-task-title { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tt-task-due { font-weight:700; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tt-task-note { opacity:.75; color:var(--dsw-alias-label-secondary,#9aa4b2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tt-task-empty { color:var(--dsw-alias-label-tertiary,#6b7280); font-size:11px; text-align:center; padding:10px 4px; }
+    /* —— 截止日醒目标记：当日列顶部红色横幅 —— */
+    .tt-duebanner { position:absolute; left:3px; right:3px; z-index:6; background:#f85149; color:#fff; font-size:10.5px; font-weight:700; padding:2px 6px; border-radius:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; box-shadow:0 1px 4px rgba(0,0,0,.35); box-sizing:border-box; }
+    .tt-duebanner:hover { filter:brightness(1.12); }
     .tt-ev-input { width:100%; height:100%; min-width:0; box-sizing:border-box; background:var(--tt-input-bg); border:1px solid var(--dsw-alias-state-accent-primary,#4f8ef7); border-radius:4px; color:var(--dsw-alias-label-primary,#e6e8eb); font:inherit; font-size:11px; padding:0 4px; outline:none; }
     /* 事件编辑器表单 */
     .ed-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px 12px; }
@@ -229,10 +242,11 @@
             <option value="weekly">每周重复</option>
             <option value="once">一次性</option>
             <option value="custom">自定义间隔</option>
+            <option value="task">任务（长周期·截止日）</option>
           </select>
         </label>
-        <label class="ed-field">开始时间<input type="time" class="dshell-input" id="eStart" /></label>
-        <label class="ed-field">结束时间<input type="time" class="dshell-input" id="eEnd" /></label>
+        <label class="ed-field" id="eStartWrap">开始时间<input type="time" class="dshell-input" id="eStart" /></label>
+        <label class="ed-field" id="eEndWrap">结束时间<input type="time" class="dshell-input" id="eEnd" /></label>
       </div>
       <div class="ed-grid" style="margin-top:8px">
         <label class="ed-field" id="ewWrap">重复星期
@@ -250,7 +264,7 @@
           </select>
         </label>
         <label class="ed-field" id="ersWrap">重复起始日期<input type="date" class="dshell-input" id="eRStart" /></label>
-        <label class="ed-field">截止日期<input type="date" class="dshell-input" id="eDeadline" title="到该日（含）为止生效；过期即不再显示，数据保留满 3 个月后自动清除；一次性事件留空即事件当日" /></label>
+        <label class="ed-field">截止日期<span id="eDlHint" style="display:none;color:#f0883e;font-weight:700">（任务必填 = 必须完成日）</span><input type="date" class="dshell-input" id="eDeadline" title="到该日（含）为止生效；过期即不再显示，数据保留满 3 个月后自动清除；一次性事件留空即事件当日；任务型 = 必须在此日（含）前完成" /></label>
       </div>
       <div class="ed-field" id="edaysWrap" style="margin-top:8px">重复星期（按间隔循环）
         <span class="ed-days" id="eDays"></span>
@@ -297,11 +311,12 @@
   (function () {
     'use strict';
 
-    // ---------- 三种组件类型的元信息（图例与默认配色） ----------
+    // ---------- 四种组件类型的元信息（图例与默认配色） ----------
     var TYPE_META = {
       weekly: { label: '每周重复', color: '#4f8ef7', desc: '每周同一时段（如课程）' },
       once:   { label: '一次性',   color: '#f85149', desc: '仅当天一次（临时事务）' },
-      custom: { label: '自定义间隔', color: '#3fb950', desc: '按自定义间隔重复' }
+      custom: { label: '自定义间隔', color: '#3fb950', desc: '按自定义间隔重复' },
+      task:   { label: '任务/截止', color: '#f0883e', desc: '长周期必完成任务，侧栏集中展示' }
     };
     var DAY_FULL = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
@@ -312,7 +327,8 @@
         { id: 'f1', title: '高等数学', type: 'weekly', weekday: 1, start: '08:00', end: '09:40', location: '教学楼A-301', color: '#4f8ef7' },
         { id: 'f2', title: '数据结构', type: 'weekly', weekday: 3, start: '14:00', end: '15:40', location: '计科楼-412', color: '#0ea5e9' },
         { id: 'f3', title: '临时面试', type: 'once', date: '2026-08-28', start: '15:00', end: '16:00', location: '就业指导中心', color: '#f85149' },
-        { id: 'f4', title: '健身', type: 'custom', start: '19:00', end: '20:00', location: '健身房', color: '#2bb673', repeat: { interval: 2, unit: 'day', start: '2026-08-24' } }
+        { id: 'f4', title: '健身', type: 'custom', start: '19:00', end: '20:00', location: '健身房', color: '#2bb673', repeat: { interval: 2, unit: 'day', start: '2026-08-24' } },
+        { id: 'f5', title: '期末项目报告（示例任务）', type: 'task', deadline: '2026-12-20', note: '长周期必完成任务：在侧栏跟踪，截止当日网格顶部红色横幅标出' }
       ]
     };
 
@@ -381,6 +397,9 @@
     function describeRepeat(ev) {
       var t = ev.type || 'once';
       var s;
+      if (t === 'task') {
+        return ev.deadline ? '任务 · 截止 ' + ev.deadline : '任务 · 未设截止';
+      }
       if (t === 'weekly') s = '每周重复 · 每' + (DAY_FULL[(ev.weekday || 1) - 1] || '周一');
       else if (t === 'once') s = '一次性 · ' + (ev.date || '');
       else {
@@ -645,11 +664,15 @@
 
     function edSyncVisibility() {
       var t = $('eType').value;
+      var isTask = t === 'task';
       edShow('ewWrap', t === 'weekly');
       edShow('edWrap', t === 'once');
       var c = t === 'custom';
       edShow('eiWrap', c); edShow('euWrap', c); edShow('ersWrap', c);
       edShow('edaysWrap', c && $('eUnit').value === 'week');
+      // 任务无起止时刻：隐藏开始/结束时间；截止日期升级为必填（红字提示）
+      edShow('eStartWrap', !isTask); edShow('eEndWrap', !isTask);
+      edShow('eDlHint', isTask);
       var badge = $('edTypeBadge');
       badge.textContent = TYPE_META[t] ? TYPE_META[t].label : t;
     }
@@ -716,9 +739,15 @@
       var start = $('eStart').value;
       var end = $('eEnd').value;
       var t = $('eType').value;
+      var isTask = t === 'task';
       if (!name) { edFail('名称不能为空'); return; }
-      if (!start || !end) { edFail('请填写开始与结束时间'); return; }
-      if (toMin(end) === toMin(start)) { edFail('结束时间不能等于开始时间（跨天日程请让结束时间小于开始时间，如 23:00–01:00）'); return; }
+      if (isTask) {
+        // 任务：无起止时刻，截止日期 = 必须完成日（必填；允许过去日期——逾期任务需保留展示）
+        if (!$('eDeadline').value) { edFail('任务需要截止日期（必须完成日，必填）'); return; }
+      } else {
+        if (!start || !end) { edFail('请填写开始与结束时间'); return; }
+        if (toMin(end) === toMin(start)) { edFail('结束时间不能等于开始时间（跨天日程请让结束时间小于开始时间，如 23:00–01:00）'); return; }
+      }
       var weekday = null, date = null, rep = null;
       if (t === 'weekly') {
         weekday = parseInt($('eWeekday').value, 10) || 1;
@@ -726,7 +755,7 @@
         date = $('eDate').value;
         if (!date) { edFail('请选择一次性事件的日期'); return; }
         if ($('eDeadline').value && $('eDeadline').value < date) { edFail('截止日期不能早于事件日期'); return; }
-      } else {
+      } else if (t === 'custom') {
         var interval = Math.max(1, parseInt($('eInterval').value, 10) || 1);
         var unit = $('eUnit').value;
         var rs = $('eRStart').value;
@@ -753,21 +782,28 @@
       // 校验全部通过后再写回原对象（保证失败时不破坏数据）
       ev.title = name;
       ev.type = t;
-      ev.start = start;
-      ev.end = end;
       ev.location = String($('eLoc').value || '').trim();
       ev.note = String($('eNote').value || '').trim();
-      var leadVal = parseInt($('eLead').value, 10);
-      if (!isNaN(leadVal) && leadVal >= 0 && leadVal <= 1440) ev.remindLead = leadVal; // 手机端提前提醒分钟数
-      else delete ev.remindLead; // 留空/非法 → 回落默认 20 分钟
-      if (t === 'weekly') { ev.weekday = weekday; delete ev.date; delete ev.repeat; }
-      else if (t === 'once') { ev.date = date; delete ev.weekday; delete ev.repeat; }
-      else { ev.repeat = rep; delete ev.weekday; delete ev.date; }
-      var dl = $('eDeadline').value;
-      if (t === 'once') ev.deadline = dl || date; // 一次性：留空即事件当日
-      else if (dl) ev.deadline = dl;
-      else if (t === 'custom' && rep && rep.until) ev.deadline = rep.until; // 与重复结束日对齐
-      else delete ev.deadline; // 留空=清除截止日期
+      if (isTask) {
+        // 任务：清掉时段/重复/单双周/例外/提醒等不适用字段，deadline 即必须完成日
+        delete ev.start; delete ev.end; delete ev.weekday; delete ev.date; delete ev.repeat;
+        delete ev.weekPattern; delete ev.skip; delete ev.remindLead;
+        ev.deadline = $('eDeadline').value;
+      } else {
+        ev.start = start;
+        ev.end = end;
+        var leadVal = parseInt($('eLead').value, 10);
+        if (!isNaN(leadVal) && leadVal >= 0 && leadVal <= 1440) ev.remindLead = leadVal; // 手机端提前提醒分钟数
+        else delete ev.remindLead; // 留空/非法 → 回落默认 20 分钟
+        if (t === 'weekly') { ev.weekday = weekday; delete ev.date; delete ev.repeat; }
+        else if (t === 'once') { ev.date = date; delete ev.weekday; delete ev.repeat; }
+        else { ev.repeat = rep; delete ev.weekday; delete ev.date; }
+        var dl = $('eDeadline').value;
+        if (t === 'once') ev.deadline = dl || date; // 一次性：留空即事件当日
+        else if (dl) ev.deadline = dl;
+        else if (t === 'custom' && rep && rep.until) ev.deadline = rep.until; // 与重复结束日对齐
+        else delete ev.deadline; // 留空=清除截止日期
+      }
       closeEditor();
       render();
       save();
@@ -838,6 +874,14 @@
       } else {
         badPanel.style.display = 'none';
       }
+      // 任务（type=task，长周期必完成）：无起止时刻，不进时段网格——抽出到右侧「截止任务」
+      // 侧栏集中展示（按截止日升序，逾期自然排最前）；截止当日网格列顶部另有红色横幅醒目标记。
+      var tasks = [];
+      evs = evs.filter(function (ev) {
+        if ((ev.type || 'once') === 'task') { tasks.push(ev); return false; }
+        return true;
+      });
+      tasks.sort(function (a, b) { return a.deadline < b.deadline ? -1 : a.deadline > b.deadline ? 1 : 0; });
       // 跨天（跨午夜）支持：end <= start 视为次日结束。
       // 第一步：先按「列」收集片段——当天段写入本列，续段写入下一列（idx+1），
       // 之后再统一排版。注意不能在遍历当列时直接 push 续段，否则会渲染到当天顶部。
@@ -883,10 +927,10 @@
       var pxPerMin = pxPerHour / 60;
       var H = Math.round((rEnd - rStart) * pxPerMin);
 
-      subEl.textContent = fmtDate(days[0]) + ' – ' + fmtDate(days[6]) + ' · 本周 ' + allVisible.length + ' 个事件';
+      subEl.textContent = fmtDate(days[0]) + ' – ' + fmtDate(days[6]) + ' · 本周 ' + allVisible.length + ' 个事件 · 截止任务 ' + tasks.length + ' 项';
       datePicker.value = fmtDate(cursor);
       renderLegend();
-      renderStats(perDay);
+      renderStats(perDay, tasks);
       renderRangeSelect();
 
       // 网格
@@ -899,6 +943,10 @@
         var dt = div('tt-daydate'); dt.textContent = (d.getMonth() + 1) + '/' + d.getDate();
         hd.appendChild(nm); hd.appendChild(dt); head.appendChild(hd);
       });
+      var taskHead = div('tt-taskhead');
+      taskHead.textContent = '⏰ 截止任务（' + tasks.length + '）';
+      taskHead.title = '长周期必完成任务集中区：按截止日排序，与普通日程不混排';
+      head.appendChild(taskHead);
       gridEl.appendChild(head);
 
       var body = div('tt-bodyrow');
@@ -926,7 +974,8 @@
         // 双击空白网格格：按点击位置时段预填 start（30 分钟对齐，默认 1 小时），以 once 型新建事件
         cell.ondblclick = (function (dayD, cellRStart, cellPxPerMin, cellEl) {
           return function (e) {
-            if (e && e.target && e.target.closest && e.target.closest('.tt-ev')) return; // 事件块上的双击交给事件编辑
+            // 事件块 / 截止横幅上的双击不新建，交给各自的点击逻辑
+            if (e && e.target && e.target.closest && (e.target.closest('.tt-ev') || e.target.closest('.tt-duebanner'))) return;
             var mins = cellRStart;
             try {
               var rect = cellEl.getBoundingClientRect();
@@ -940,11 +989,32 @@
           };
         })(d, rStart, pxPerMin, cell);
         perDay[idx].list.forEach(function (e) { cell.appendChild(makeEv(e, perDay[idx].lanes, rStart, pxPerMin)); });
+        // 截止日醒目标记：当日列顶部红色横幅（可点击查看任务详情），多条截止时纵向堆叠
+        var dueToday = tasks.filter(function (tk) { return tk.deadline === fmtDate(d); });
+        dueToday.forEach(function (tk, bi) {
+          var bn = div('tt-duebanner');
+          bn.style.top = (2 + bi * 22) + 'px';
+          bn.textContent = '⏰ 截止：' + (tk.title || '(未命名)');
+          bn.title = (tk.title || '') + ' · 截止 ' + tk.deadline + '（点击查看详情）';
+          bn.onclick = function () { showDetail(tk); };
+          cell.appendChild(bn);
+        });
         if (isToday(d) && nowMin >= rStart && nowMin <= rEnd) {
           var nl = div('tt-now'); nl.style.top = ((nowMin - rStart) * pxPerMin) + 'px'; cell.appendChild(nl);
         }
         body.appendChild(cell);
       });
+      // 第 9 列：截止任务侧栏（与网格同高，内部滚动）
+      var taskCol = div('tt-taskcol');
+      taskCol.style.height = H + 'px';
+      if (!tasks.length) {
+        var taskEmpty = div('tt-task-empty');
+        taskEmpty.textContent = '暂无截止任务';
+        taskCol.appendChild(taskEmpty);
+      } else {
+        tasks.forEach(function (tk) { taskCol.appendChild(makeTask(tk)); });
+      }
+      body.appendChild(taskCol);
       gridEl.appendChild(body);
     }
 
@@ -976,6 +1046,37 @@
       return b;
     }
 
+    // ---------- 截止任务（type=task）：紧急度分级与侧栏卡片 ----------
+    function daysDiff(a, b) { return Math.round((parseDate(a) - parseDate(b)) / 86400000); } // a-b 天数
+    /** 任务紧急度：{ cls, color, text }——逾期/今天红、明天与 ≤3 天橙、≤7 天黄、更远蓝。 */
+    function taskUrgency(dl) {
+      var today = fmtDate(new Date());
+      if (!TTOccur.isDateStr(dl)) return { cls: 'tt-task--later', color: '#6e7681', text: '未设截止' };
+      var n = daysDiff(dl, today); // >0 未来，0 今天，<0 已逾期
+      if (n < 0) return { cls: 'tt-task--over', color: '#f85149', text: '已逾期 ' + (-n) + ' 天' };
+      if (n === 0) return { cls: 'tt-task--today', color: '#f85149', text: '今天截止' };
+      if (n === 1) return { cls: 'tt-task--soon', color: '#f0883e', text: '明天截止' };
+      if (n <= 3) return { cls: 'tt-task--soon', color: '#f0883e', text: '还剩 ' + n + ' 天' };
+      if (n <= 7) return { cls: 'tt-task--week', color: '#d29922', text: '还剩 ' + n + ' 天' };
+      return { cls: 'tt-task--later', color: '#4f8ef7', text: '还剩 ' + n + ' 天' };
+    }
+    function makeTask(tk) {
+      var u = taskUrgency(tk.deadline);
+      var card = div('tt-task ' + u.cls);
+      card.style.borderLeftColor = u.color;
+      card.style.background = hexToRgba(u.color, 0.13);
+      var t = div('tt-task-title'); t.textContent = tk.title || '(未命名)'; t.style.color = u.color;
+      var d = div('tt-task-due'); d.textContent = '⏰ ' + (tk.deadline || '未设截止') + ' · ' + u.text; d.style.color = u.color;
+      card.appendChild(t); card.appendChild(d);
+      if (tk.note) { var nt = div('tt-task-note'); nt.textContent = tk.note; card.appendChild(nt); }
+      card.title = (tk.title || '') + '\n截止 ' + (tk.deadline || '—') + '（' + u.text + '）' + (tk.note ? '\n' + tk.note : '') + '\n单击=详情，双击=编辑';
+      card.tabIndex = 0; // 可键盘聚焦：Enter 打开详情
+      card.onclick = function () { showDetail(tk); };
+      card.ondblclick = function () { openEditor(tk); };
+      card.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); showDetail(tk); } };
+      return card;
+    }
+
     function renderLegend() {
       legendEl.innerHTML = '';
       Object.keys(TYPE_META).forEach(function (k) {
@@ -988,12 +1089,12 @@
       });
     }
 
-    function renderStats(perDay) {
+    function renderStats(perDay, tasks) {
       var list = [];
       perDay.forEach(function (p) { p.list.forEach(function (e) { if (!e._cont) list.push(e); }); }); // 续段不重复计数
       var c = { weekly: 0, once: 0, custom: 0 };
       list.forEach(function (e) { c[e.type || 'once'] = (c[e.type || 'once'] || 0) + 1; });
-      var cards = [['本周事件', list.length], ['每周重复', c.weekly], ['一次性', c.once], ['自定义间隔', c.custom]];
+      var cards = [['本周事件', list.length], ['每周重复', c.weekly], ['一次性', c.once], ['自定义间隔', c.custom], ['截止任务', (tasks || []).length]];
       statsEl.innerHTML = '';
       cards.forEach(function (pair) {
         var s = div('dshell-stat');
@@ -1026,8 +1127,15 @@
       badge.textContent = meta.label;
       badge.className = 'dshell-badge';
       if (t === 'once') badge.classList.add('dshell-badgeWait'); else badge.classList.add('dshell-badgeDone');
-      $('dTime').textContent = fmtMin(toMin(ev.start)) + ' – ' + fmtMin(toMin(ev.end)) + (toMin(ev.end) <= toMin(ev.start) ? '（跨天，次日结束）' : '');
-      $('dRepeat').textContent = describeRepeat(ev);
+      if (t === 'task') {
+        // 任务：无起止时刻，突出截止日与剩余天数
+        var u = taskUrgency(ev.deadline);
+        $('dTime').textContent = TTOccur.isDateStr(ev.deadline) ? ('截止 ' + ev.deadline + '（' + u.text + '）') : '未设截止';
+        $('dRepeat').textContent = '长周期必完成任务 · 需在截止日（含）前完成，侧栏集中展示';
+      } else {
+        $('dTime').textContent = fmtMin(toMin(ev.start)) + ' – ' + fmtMin(toMin(ev.end)) + (toMin(ev.end) <= toMin(ev.start) ? '（跨天，次日结束）' : '');
+        $('dRepeat').textContent = describeRepeat(ev);
+      }
       $('dLoc').textContent = ev.location || '—';
       $('dNote').textContent = ev.note || '—';
       detailEl.style.display = 'block';
@@ -1204,6 +1312,17 @@
         var ds = fmtDate(day);
         valid.forEach(function (ev) {
           if (!occursOn(ev, day)) return;
+          // 任务（type=task）：按 RFC 5545 导出为 VTODO（DUE = 截止日全天），不占用时段
+          if ((ev.type || 'once') === 'task') {
+            lines.push('BEGIN:VTODO');
+            lines.push('UID:' + (ev.id || ev.title || 'task') + '-' + ds.replace(/-/g, '') + '@auto-timetable');
+            lines.push('DTSTAMP:' + nowStamp);
+            lines.push('DUE;VALUE=DATE:' + ds.replace(/-/g, ''));
+            lines.push('SUMMARY:' + icsEsc('[截止] ' + ev.title));
+            if (ev.note) lines.push('DESCRIPTION:' + icsEsc(ev.note));
+            lines.push('END:VTODO');
+            return;
+          }
           var s = toMin(ev.start), e = toMin(ev.end);
           var endDay = (e <= s) ? addDays(day, 1) : day; // 跨午夜（end<=start）：结束落在次日
           lines.push('BEGIN:VEVENT');
@@ -1221,9 +1340,10 @@
       return lines.map(icsFold).join('\r\n') + '\r\n';
     }
     $('btnExportIcs').onclick = function () {
-      var ics = buildIcs(new Date(), 56); // 未来 8 周（56 天）按 occursOn 展开
+      var ics = buildIcs(new Date(), 56); // 未来 8 周（56 天）按 occursOn 展开（任务导出为 VTODO）
+      var n = (ics.match(/BEGIN:V(?:EVENT|TODO)/g) || []).length;
       downloadFile('timetable-' + fmtDate(new Date()) + '.ics', ics, 'text/calendar;charset=utf-8');
-      setSaveStatus('已导出 ICS（未来 8 周，' + ((ics.match(/BEGIN:VEVENT/g) || []).length) + ' 条）', true);
+      setSaveStatus('已导出 ICS（未来 8 周，' + n + ' 条，含 VTODO 任务）', true);
     };
 
     // ---- 教学周显示（meta.termStart，周一起算；未配置/未开学不显示） ----

@@ -2,7 +2,7 @@
 
 ## 方法
 
-- 用例来源：`.qrtest/occur-test.mjs` 的 occursOn 表（46 例：weekly 基本/边界/deadline、once、custom×day|week|month×interval×days×until×deadline×跨午夜组合、skip 例外日期、weekPattern 单双周、skip+weekPattern 组合）。
+- 用例来源：`.qrtest/occur-test.mjs` 的 occursOn 表（50 例：weekly 基本/边界/deadline、once、custom×day|week|month×interval×days×until×deadline×跨午夜组合、skip 例外日期、weekPattern 单双周、skip+weekPattern 组合、task 长周期任务截止日）。
 - JS 侧：`node .qrtest/occur-test.mjs --table` 输出用例表 JSON（含每例期望值）。
 - Python 侧：同表 JSON 经 stdin 喂给 `timetable_core.occurs_on(ev, date.fromisoformat(day))`，逐例比对 JS 期望值。
 
@@ -27,17 +27,18 @@ print('parity: %d same, %d diff, total %d' % (len(res) - len(diffs), len(diffs),
 sys.exit(1 if diffs else 0)
 ```
 
-## 结果（2026-08-31，P2-3 更新）
+## 结果（2026-09-02，task 长周期任务更新）
 
 ```
-parity: 46 same, 0 diff, total 46
+parity: 50 same, 0 diff, total 50
 ```
 
-46 例全部一致，零分歧（P2-3 前为 31 例全同）。覆盖的关键语义点均对齐：
+50 例全部一致，零分歧（P2-3 时为 46 例全同，本次新增 task 4 例）。覆盖的关键语义点均对齐：
 
 | 语义点 | 双侧一致行为 |
 | --- | --- |
 | deadline | 到该日（含）为止生效；次日不再发生 |
+| task | 长周期任务：仅截止当日「发生」（deadline = 必须完成日）；前后日均不发生；缺 deadline 永不发生 |
 | skip | 例外日期命中即不发生（deadline 之后、类型判定之前；对 weekly/once/custom 均生效） |
 | weekPattern | 仅 weekly：start 所在周=第 1 教学周，odd=true 单数周 / false 双数周；早于基准周不发生；非法 start 视为无模式 |
 | weekly weekday 缺省 | 按 1（周一）处理 |

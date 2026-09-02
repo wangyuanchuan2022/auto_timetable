@@ -241,5 +241,75 @@ section('7) 备份冲突面板');
     !!written && written.events[0].title === '备份版2' && h.eventsOnGrid().some((e) => e.textContent.indexOf('备份版2') > -1));
 }
 
+// ========== 8) 长周期截止任务（task 型）：侧栏集中展示 + 截止日横幅 + 编辑器 ==========
+section('8) task 任务：侧栏 / 截止横幅 / 编辑器');
+const TASK_SOON = fmtDate((() => { const d = new Date(NOW); d.setDate(d.getDate() + 2); return d; })()); // 后天（≤3 天 → 橙）
+const TASK_OVER = fmtDate((() => { const d = new Date(NOW); d.setDate(d.getDate() - 3); return d; })()); // 3 天前（逾期 → 红）
+const TASK_FAR = fmtDate((() => { const d = new Date(NOW); d.setDate(d.getDate() + 20); return d; })()); // 20 天后（更远 → 蓝）
+{
+  const h = loadPage({ schedule: { meta: {}, events: [
+    weeklyToday('g1', '普通课'), // 无回归哨兵：普通事件照常进时段网格
+    { id: 't1', title: '逾期任务', type: 'task', deadline: TASK_OVER },
+    { id: 't2', title: '今天截止任务', type: 'task', deadline: TODAY },
+    { id: 't3', title: '后天截止任务', type: 'task', deadline: TASK_SOON },
+    { id: 't4', title: '远期任务', type: 'task', deadline: TASK_FAR },
+  ] } });
+  await h.flush(); await h.flush();
+  const titles = h.eventsOnGrid().map((e) => e.textContent);
+  check('无回归：普通事件照常渲染', titles.some((t) => t.indexOf('普通课') > -1));
+  check('任务不进时段网格（不与普通日程混排）', !titles.some((t) => t.indexOf('截止任务') > -1 || t.indexOf('逾期任务') > -1));
+  const taskCards = h.collect(h.grid, (e) => e.classList.contains('tt-task'));
+  check('侧栏 4 张任务卡（集中展示）', taskCards.length === 4);
+  check('侧栏按截止日升序（逾期排最前）', taskCards[0] && taskCards[0].textContent.indexOf('逾期任务') > -1);
+  check('逾期卡红色分级（--over + 已逾期 3 天）', taskCards[0].className.indexOf('tt-task--over') > -1 && taskCards[0].textContent.indexOf('已逾期 3 天') > -1);
+  check('今天截止卡（--today）', taskCards[1].className.indexOf('tt-task--today') > -1 && taskCards[1].textContent.indexOf('今天截止') > -1);
+  check('≤3 天橙色分级（--soon + 还剩 2 天）', taskCards[2].className.indexOf('tt-task--soon') > -1 && taskCards[2].textContent.indexOf('还剩 2 天') > -1);
+  check('远期蓝色分级（--later）', taskCards[3].className.indexOf('tt-task--later') > -1);
+  const banners = h.collect(h.grid, (e) => e.classList.contains('tt-duebanner'));
+  // 注：「后天截止」是否同周随运行日变化（周一~五同周 → 2 条横幅；周六/日 → 1 条），
+  // 故按内容断言今天截止的横幅存在且唯一，不锁横幅总数。
+  const todayBanners = banners.filter((b) => b.textContent.indexOf('今天截止任务') > -1);
+  const knownBanners = banners.every((b) => b.textContent.indexOf('今天截止任务') > -1 || b.textContent.indexOf('后天截止任务') > -1);
+  check('截止当日网格列顶红色横幅（醒目标记）', todayBanners.length === 1 && knownBanners);
+  banners[0].onclick();
+  check('点横幅打开任务详情（截止时间醒目）',
+    h.byId.detailPanel.style.display === 'block' && h.byId.dTime.textContent.indexOf('截止 ' + TODAY) > -1 && h.byId.dTime.textContent.indexOf('今天截止') > -1);
+  check('统计卡含「截止任务」= 4', h.byId.ttStats.textContent.indexOf('截止任务') > -1 && /截止任务\s*4/.test(h.byId.ttStats.textContent));
+  check('侧栏表头带计数', h.collect(h.grid, (e) => e.classList.contains('tt-taskhead')).some((e) => e.textContent.indexOf('截止任务（4）') > -1));
+}
+{
+  // 新建 task：必填校验 + 字段清理
+  const h = loadPage({ schedule: { meta: {}, events: [] } });
+  await h.flush(); await h.flush();
+  h.byId.btnNew.onclick();
+  h.byId.eType.value = 'task'; h.byId.eType.onchange();
+  check('切到 task：开始/结束时间隐藏、截止日必填提示显示',
+    h.byId.eStartWrap.style.display === 'none' && h.byId.eEndWrap.style.display === 'none' && h.byId.eDlHint.style.display === '');
+  h.byId.eName.value = '期末报告';
+  h.byId.btnSaveEdit.onclick();
+  check('task 缺截止日期拒绝保存（不写文件）', h.byId.edMsg.textContent.indexOf('任务需要截止日期') > -1 && h.writes.length === 0);
+  h.byId.eDeadline.value = TASK_FAR;
+  h.byId.btnSaveEdit.onclick(); await h.flush(); await h.flush();
+  const ev = h.getSchedule().events[0];
+  check('task 保存：type=task + deadline 写入，无 start/end/weekday/repeat/remindLead 残留',
+    ev && ev.type === 'task' && ev.deadline === TASK_FAR && !('start' in ev) && !('end' in ev)
+    && !('weekday' in ev) && !('repeat' in ev) && !('remindLead' in ev));
+  check('task 保存写回 schedule.json', h.writes.length === 1);
+}
+{
+  // weekly → task 转换：旧时段/重复字段清理，转后进侧栏不进网格
+  const h = loadPage({ schedule: { meta: {}, events: [weeklyToday('x9', '转任务')] } });
+  await h.flush(); await h.flush();
+  h.eventsOnGrid().find((e) => e.textContent.indexOf('转任务') > -1).ondblclick();
+  h.byId.eType.value = 'task'; h.byId.eType.onchange();
+  h.byId.eDeadline.value = TASK_SOON;
+  h.byId.btnSaveEdit.onclick(); await h.flush(); await h.flush();
+  const ev = h.getSchedule().events.find((e) => e.id === 'x9');
+  check('weekly→task：start/end/weekday 清理、新 deadline 写入',
+    ev.type === 'task' && ev.deadline === TASK_SOON && !('start' in ev) && !('end' in ev) && !('weekday' in ev));
+  check('转换后不再出现在时段网格', !h.eventsOnGrid().some((e) => e.textContent.indexOf('转任务') > -1));
+  check('转换后出现在侧栏', h.collect(h.grid, (e) => e.classList.contains('tt-task')).some((c) => c.textContent.indexOf('转任务') > -1));
+}
+
 console.log(`\nschedule.html\n  通过 ${pass} / 失败 ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

@@ -8,7 +8,9 @@
  * - once:   date = "YYYY-MM-DD"
  * - custom: repeat{interval(>=1), unit(day|week|month), start, days[](仅 week), until}
  *           week 未指定 days → 仅起始日的星期几；month 按「几号」匹配（起始日 > 28 时小月自然跳过）
- * - deadline: 到该日（含）为止生效
+ * - deadline: 到该日（含）为止生效；type=task 时含义为「任务必须完成日」（必填）
+ * - task:     长周期必完成任务（无起止时刻，不进时段网格）：deadline = 必须完成日（必填）。
+ *             occursOn 仅在截止当日为真（供单日视图/截止日标记使用）；侧栏集中渲染由页面负责
  * - skip: ["YYYY-MM-DD", ...] 例外日期（停课/调休），该事件在这些日期不发生（先于类型判定）
  * - remindLead: 提醒提前分钟数（>=0；0 = 不提醒；缺失/非法回落默认，由 leadMinutes(ev, def) 提供）
  * - isPurgeable/archiveFor: 过期归档判定与归档纯函数（服务端 purgeExpired 接入走共享模块）
@@ -75,6 +77,7 @@
       return weekPatternOk(ev, day); // 单双周（未配置 = 恒真）
     }
     if (type === 'once') return ev.date === ds;
+    if (type === 'task') return ds === ev.deadline; // 任务：仅在截止当日「发生」（时段网格不渲染，供单日视图/截止标记）
     if (type === 'custom') {
       var r = ev.repeat || {};
       if (!r.start || ds < r.start) return false;
@@ -117,14 +120,19 @@
     if (!ev || typeof ev !== 'object' || Array.isArray(ev)) return ['事件必须是对象'];
     var errs = [];
     var type = ev.type;
-    if (type !== 'weekly' && type !== 'once' && type !== 'custom') {
-      errs.push('type 必须是 weekly/once/custom');
+    if (type !== 'weekly' && type !== 'once' && type !== 'custom' && type !== 'task') {
+      errs.push('type 必须是 weekly/once/custom/task');
     }
     if (!ev.title || !String(ev.title).trim()) errs.push('title 不能为空');
-    if (!HHMM_RE.test(String(ev.start || ''))) errs.push('start 必须是 HH:MM（00:00–23:59）');
-    if (!HHMM_RE.test(String(ev.end || ''))) errs.push('end 必须是 HH:MM（00:00–23:59）');
-    if (HHMM_RE.test(String(ev.start || '')) && HHMM_RE.test(String(ev.end || ''))) {
-      if (parseHHMM(ev.end) === parseHHMM(ev.start)) errs.push('end 不能等于 start（跨天日程请 end < start，如 23:00–01:00）');
+    if (type === 'task') {
+      // 任务（长周期必完成）：无起止时刻，deadline = 必须完成日（必填）
+      if (!isDateStr(ev.deadline)) errs.push('task 事件需要有效 deadline（YYYY-MM-DD，必须完成日）');
+    } else {
+      if (!HHMM_RE.test(String(ev.start || ''))) errs.push('start 必须是 HH:MM（00:00–23:59）');
+      if (!HHMM_RE.test(String(ev.end || ''))) errs.push('end 必须是 HH:MM（00:00–23:59）');
+      if (HHMM_RE.test(String(ev.start || '')) && HHMM_RE.test(String(ev.end || ''))) {
+        if (parseHHMM(ev.end) === parseHHMM(ev.start)) errs.push('end 不能等于 start（跨天日程请 end < start，如 23:00–01:00）');
+      }
     }
     var wd = parseInt(ev.weekday, 10);
     if (type === 'weekly' && !(wd >= 1 && wd <= 7)) errs.push('weekly 事件需要 weekday（1=周一 … 7=周日）');

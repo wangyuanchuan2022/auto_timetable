@@ -6,7 +6,8 @@
     { "id": "course-example-pe", "title": "示例课程·体育（单双周）", "type": "weekly", "weekday": 3, "start": "14:00", "end": "15:40", "location": "田径场", "remindLead": 15, "deadline": "2027-01-17", "weekPattern": { "start": "2026-09-14", "odd": true } },
     { "id": "course-example-english", "title": "示例课程·大学英语", "type": "weekly", "weekday": 3, "start": "10:00", "end": "11:40", "location": "外语楼B-202", "remindLead": 0, "deadline": "2027-01-17", "skip": ["2026-10-07"] },
     { "id": "evt-example-exam", "title": "示例·期中考试", "type": "once", "date": "2026-11-05", "start": "09:00", "end": "11:00", "location": "第一教学楼", "note": "带学生证", "remindLead": 30 },
-    { "id": "evt-example-gym", "title": "示例·健身", "type": "custom", "start": "19:00", "end": "20:00", "repeat": { "interval": 2, "unit": "day", "start": "2026-09-01", "until": "2026-12-31" }, "remindLead": 15 }
+    { "id": "evt-example-gym", "title": "示例·健身", "type": "custom", "start": "19:00", "end": "20:00", "repeat": { "interval": 2, "unit": "day", "start": "2026-09-01", "until": "2026-12-31" }, "remindLead": 15 },
+    { "id": "task-example-proposal", "title": "示例·完成课程项目申请书", "type": "task", "deadline": "2026-12-20", "note": "长周期必完成任务：不占时段，集中在周视图右侧「截止任务」侧栏展示；截止当日网格顶部红色横幅标出" }
   ],
   "archive": [
     { "id": "evt-example-old", "title": "示例·已归档的旧活动", "type": "once", "date": "2026-05-20", "start": "18:00", "end": "20:00", "deadline": "2026-05-20", "archivedAt": "2026-08-20T12:00:00.000Z" }

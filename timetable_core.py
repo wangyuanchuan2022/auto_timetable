@@ -11,7 +11,9 @@ reminder_app.py 与 reminder-plugin/runtime/helper.py 各存一份且已现漂�
 - weekly: weekday 1=周一..7=周日；可选 weekPattern{start, odd} 单双周
 - once:   date = "YYYY-MM-DD"
 - custom: repeat{interval, unit(day|week|month), start, days[], until}
-- deadline: 到该日（含）为止生效
+- task:   长周期必完成任务（无起止时刻）：deadline = 必须完成日（必填）；
+          occurs_on 仅在截止当日为真（时刻提醒不涉及——load_day 跳过 task）
+- deadline: 到该日（含）为止生效；task 型含义为「任务必须完成日」
 - skip: ["YYYY-MM-DD", ...] 例外日期（停课/调休），该日不发生
 - remindLead: 提醒提前分钟数（>=0；0 = 不提醒；缺失/非法回落默认双档）
 
@@ -77,6 +79,8 @@ def occurs_on(ev, d):
         return _week_pattern_ok(ev, d)  # 单双周（未配置恒真）
     if t == "once":
         return ev.get("date") == ds
+    if t == "task":
+        return ds == (dl or "")  # 任务：仅在截止当日「发生」（时刻提醒不涉及，load_day 跳过）
     if t == "custom":
         r = ev.get("repeat") or {}
         rs = r.get("start")
@@ -158,6 +162,8 @@ def load_day(data_path, d):
         for ev in events:
             if not isinstance(ev, dict) or not ev.get("title"):
                 continue
+            if ev.get("type") == "task":
+                continue  # 任务无起止时刻，不参与时刻提醒（侧栏展示由页面负责）
             try:
                 hit = occurs_on(ev, d)
             except Exception:

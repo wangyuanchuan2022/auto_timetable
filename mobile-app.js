@@ -117,6 +117,7 @@
     function describeRepeat(ev) {
       var t = ev.type || 'once';
       var s;
+      if (t === 'task') return ev.deadline ? '任务 · 截止 ' + ev.deadline : '任务 · 未设截止';
       if (t === 'weekly') s = '每周重复 · ' + (DAY_FULL[(ev.weekday || 1) - 1] || '');
       else if (t === 'once') s = '一次性 · ' + (ev.date || '');
       else {
@@ -129,7 +130,7 @@
         s += ' · ' + (ev.weekPattern.odd === false ? '双周' : '单周') + '（自 ' + ev.weekPattern.start + ' 所在周起算）';
       }
       if (Array.isArray(ev.skip) && ev.skip.length) s += ' · 例外 ' + ev.skip.length + ' 天';
-      if (t !== 'once' && ev.deadline) s += ' · 截止 ' + ev.deadline;
+      if (t !== 'once' && t !== 'task' && ev.deadline) s += ' · 截止 ' + ev.deadline;
       return s;
     }
 
@@ -178,20 +179,31 @@
       evs.forEach(function (ev) {
         var it = document.createElement('div');
         it.className = 'it';
+        var isTask = (ev.type || 'once') === 'task'; // 长周期必完成任务：无起止时刻，截止当日出现在列表
         var s = toMin(ev.start), e = toMin(ev.end);
-        if (isToday(day) && s <= nowMin && e >= nowMin) it.style.borderColor = '#f85149';
+        if (isTask) { if (isToday(day)) it.style.borderColor = '#f85149'; }
+        else if (isToday(day) && s <= nowMin && e >= nowMin) it.style.borderColor = '#f85149';
 
         var bar = document.createElement('div');
         bar.className = 'bar';
-        bar.style.background = ev.color || '#4f8ef7';
+        bar.style.background = ev.color || (isTask ? '#f85149' : '#4f8ef7');
 
         var time = document.createElement('div');
         time.className = 'time';
-        time.textContent = ev.start || '';
-        var sub = document.createElement('small');
-        sub.textContent = '至 ' + (ev.end || '');
-        sub.className = 'muted';
-        time.appendChild(sub);
+        if (isTask) {
+          time.textContent = '截止'; // 任务：时刻位显示截止标（醒目红字）
+          time.style.color = '#f85149';
+          var dsub = document.createElement('small');
+          dsub.textContent = ev.deadline || '';
+          dsub.className = 'muted';
+          time.appendChild(dsub);
+        } else {
+          time.textContent = ev.start || '';
+          var sub = document.createElement('small');
+          sub.textContent = '至 ' + (ev.end || '');
+          sub.className = 'muted';
+          time.appendChild(sub);
+        }
 
         var body = document.createElement('div');
         body.style.minWidth = '0'; body.style.flex = '1';
@@ -205,7 +217,7 @@
           m.textContent = ev.location;
           body.appendChild(m);
         }
-        if (ev.deadline && (ev.type || 'once') !== 'once') {
+        if (ev.deadline && !isTask && (ev.type || 'once') !== 'once') {
           var dlm = document.createElement('div');
           dlm.className = 'meta muted';
           dlm.textContent = '⏱ 截止 ' + ev.deadline;
@@ -230,7 +242,7 @@
         '  <h2>日程详情</h2>' +
         '  <div class="rep muted" id="dRep"></div>' +
         '  <div class="field"><label>名称</label><input id="dTitle" /></div>' +
-        '  <div class="row2">' +
+        '  <div class="row2" id="dTimeRow">' +
         '    <div class="field"><label>开始时间</label><input type="time" id="dStart" /></div>' +
         '    <div class="field"><label>结束时间</label><input type="time" id="dEnd" /></div>' +
         '  </div>' +
@@ -252,6 +264,8 @@
         '  <div class="dlgMsg" id="dMsg"></div>' +
         '</div>';
       document.body.appendChild(mask);
+      var isTaskDlg = (ev.type || 'once') === 'task'; // 任务：无起止时刻，截止日期必填
+      if (isTaskDlg) $('dTimeRow').style.display = 'none';
       $('dRep').textContent = describeRepeat(ev);
       $('dTitle').value = ev.title || '';
       $('dStart').value = ev.start || '';
@@ -329,8 +343,12 @@
         var msgEl = $('dMsg');
         msgEl.className = 'dlgMsg';
         if (!title) { msgEl.textContent = '名称不能为空'; msgEl.classList.add('err'); return; }
-        if (!start || !end) { msgEl.textContent = '请填写开始与结束时间'; msgEl.classList.add('err'); return; }
-        if (toMin(end) === toMin(start)) { msgEl.textContent = '结束时间不能等于开始时间'; msgEl.classList.add('err'); return; }
+        if (isTaskDlg) {
+          if (!$('dDeadline').value) { msgEl.textContent = '任务需要截止日期（必须完成日，必填）'; msgEl.classList.add('err'); return; }
+        } else {
+          if (!start || !end) { msgEl.textContent = '请填写开始与结束时间'; msgEl.classList.add('err'); return; }
+          if (toMin(end) === toMin(start)) { msgEl.textContent = '结束时间不能等于开始时间'; msgEl.classList.add('err'); return; }
+        }
         // 例外日期（skip）：逗号/中文逗号/顿号/空格分隔 → 数组；空 = 清除；格式逐个校验
         var skipRaw = String($('dSkip').value || '').trim();
         var skipList = skipRaw ? skipRaw.split(/[,，、\s]+/).filter(Boolean) : [];
@@ -367,17 +385,23 @@
 
         // 先改内存对象，写盘成功后关闭
         editEv.title = title;
-        editEv.start = start;
-        editEv.end = end;
+        if (isTaskDlg) {
+          delete editEv.start; delete editEv.end; delete editEv.remindLead; // 任务无起止时刻、不参与时刻提醒
+        } else {
+          editEv.start = start;
+          editEv.end = end;
+        }
         editEv.location = String($('dLoc').value || '').trim();
         editEv.note = String($('dNote').value || '').trim();
         if (skipList.length) editEv.skip = skipList;
         else delete editEv.skip; // 留空 = 清除例外日期
         if (newWp) editEv.weekPattern = newWp;
         else delete editEv.weekPattern; // 每周（none）或非 weekly → 清除
-        var leadVal = parseInt($('dLead').value, 10);
-        if (!isNaN(leadVal) && leadVal >= 0 && leadVal <= 1440) editEv.remindLead = leadVal;
-        else delete editEv.remindLead; // 缺省回落到默认 20 分钟
+        if (!isTaskDlg) {
+          var leadVal = parseInt($('dLead').value, 10);
+          if (!isNaN(leadVal) && leadVal >= 0 && leadVal <= 1440) editEv.remindLead = leadVal;
+          else delete editEv.remindLead; // 缺省回落到默认 20 分钟
+        }
         var dl = $('dDeadline').value;
         if (dl) editEv.deadline = dl;
         else if ((editEv.type || 'once') === 'once' && editEv.date) editEv.deadline = editEv.date; // 一次性：留空即事件当日
@@ -440,6 +464,7 @@
       [now, new Date(now.getTime() + 864e5)].forEach(function (day) {
         var isToday = fmtDate(day) === fmtDate(now);
         data.events.forEach(function (ev) {
+          if ((ev.type || 'once') === 'task') return; // 任务无起止时刻，不参与时刻提醒
           if (!occursOn(ev, day)) return;
           var lead = leadOf(ev);
           if (!(lead > 0)) return; // remindLead = 0 → 不提醒

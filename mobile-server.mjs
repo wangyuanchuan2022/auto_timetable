@@ -533,6 +533,7 @@ function startReminderScheduler() {
       let changed = false;
       const today = srvFmtDate(now);
       for (const ev of (data.events ?? [])) {
+        if ((ev.type || 'once') === 'task') continue; // 任务无起止时刻，不参与时刻提醒（侧栏展示由桌面端负责）
         for (const day of [now, new Date(now.getTime() + 864e5)]) {
           if (!srvOccursOn(ev, day)) continue;
           const lead = TTOccur.leadMinutes(ev); // 显式 0 = 不提醒；非法/缺失才默认 20
