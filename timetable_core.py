@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """timetable_core — 智能工作表领域判定核心（Python 侧单一实现）。
 
-供两个桌面端入口共享，禁止再各自拷贝（历史教训：occurs_on 曾在
-reminder_app.py 与 reminder-plugin/runtime/helper.py 各存一份且已现漂移）：
+供桌面端入口共享，禁止再各自拷贝（历史教训：occurs_on 曾在
+多份拷贝间漂移）：
 
-- reminder_app.py（独立桌面版，本模块同目录，直接 import）
 - reminder-plugin/runtime/helper.py（DSH 插件版，经 sys.path 注入仓库根后 import）
 
 数据契约与 schedule.json / mobile-server.mjs / 网页端一致：

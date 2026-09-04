@@ -2,7 +2,7 @@
 """纯逻辑单测：occurs_on / parse_hotkey / parse_hhmm / lead_minutes / load_day。
 
 occurs_on / parse_hhmm / lead_minutes / load_day 的单一实现在仓库根
-timetable_core.py（helper.py 与 reminder_app.py 均从其 import，本测试直测核心模块）。
+timetable_core.py（helper.py 从其 import，本测试直测核心模块）。
 """
 import json
 import sys

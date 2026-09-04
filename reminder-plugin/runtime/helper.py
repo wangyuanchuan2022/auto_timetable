@@ -4,17 +4,21 @@
 DSH 插件宿主拥有本进程：stdin 按行收 JSON 命令，stdout 按行回 JSON 应答。
 stdin 关闭即退出（生命周期信号），用户主动退出时回报 CLOSED（宿主不再重启）。
 
-UI 全部基于 maliang（https://xiaokang2022.github.io/maliang-docs/3.1/）实现：
-- 主窗口：ma.Tk + ma.Canvas + ma.Label/ma.Button（Win11 深色卡片）
-- 提醒弹窗：ma.Toplevel + 真·亚克力模糊（theme.apply_theme, 需 pywinstyles）
-- 亚克力不可用时回退半透明圆角卡片，功能不受影响
+UI 全部基于 maliang（https://xiaokang2022.github.io/maliang-docs/3.1/）实现，
+跨平台（Windows/macOS/Linux）：界面层不直接调用任何操作系统私有接口，
+同一份代码在三大桌面平台均可运行。
+- 主窗口：ma.Tk + ma.Canvas + ma.Label/ma.Button（深色卡片，自绘标题栏可拖动）
+- 提醒弹窗：ma.Toplevel 无边框深色卡片 Toast（右下角滑入、堆叠、悬停暂停、
+  底部进度条）
 
 功能：
-- 主窗口列出当日日程（按开始时间升序），Windows 11 风格
+- 主窗口列出当日日程（按开始时间升序）
 - 按事件级 remindLead 提前 Toast（缺失/非法时默认 30、10 双档；0 明确不提醒）；
   启动时已过期的提醒点跳过
-- Toast：右下角滑入、堆叠、悬停暂停、底部进度条（对齐 Windows 原生通知）
+- Toast：右下角滑入、堆叠、悬停暂停、底部进度条（仿系统通知）
 - 窗口隐藏/关闭后提醒照常触发；全局快捷键（默认 Ctrl+Alt+T）切换主窗口显隐
+  ——平台相关能力仅两处（全局热键 + Windows 高 DPI 感知），均经 sys.platform
+  守护：非 Windows 平台自动跳过（无全局热键，显隐由宿主 show/hide 命令控制）
 - 数据文件每分钟自动重读，支持外部编辑（与网页版共用 schedule.json）；
   领域判定（occurs_on / 提醒档位 / 读取）统一来自仓库根 timetable_core.py 单一实现
 
@@ -23,8 +27,6 @@ UI 全部基于 maliang（https://xiaokang2022.github.io/maliang-docs/3.1/）实
 from __future__ import annotations
 
 import argparse
-import ctypes
-import ctypes.wintypes as wintypes
 import json
 import os
 import queue
@@ -33,12 +35,17 @@ import threading
 import time as _time
 from datetime import datetime, date, timedelta
 
-import tkinter as tk
-
 import maliang as ma
 from maliang import theme as ma_theme
 
-# 领域判定单一实现：仓库根目录 timetable_core.py（与独立版 reminder_app.py 共享，禁止双源）。
+# 平台相关能力（全局快捷键 / 高 DPI 感知）：全文件唯一的 Win32 依赖点，仅 Windows
+# 加载 ctypes 绑定；其余 UI 全部为 maliang/tkinter 跨平台实现。
+IS_WINDOWS = sys.platform == "win32"
+if IS_WINDOWS:
+    import ctypes
+    import ctypes.wintypes as wintypes
+
+# 领域判定单一实现：仓库根目录 timetable_core.py（桌面/手机/网页共用，禁止双源）。
 # 部署前提：保留仓库根目录与 reminder-plugin/ 的相对目录结构（link: 安装即满足）。
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
 try:
@@ -78,27 +85,31 @@ FS_TITLE = 22     # 页面主标题（bold）
 FS_DLG_CAPTION = 15    # 辅助行：应用名 / 地点
 FS_DLG_BODY = 16.5     # 正文：时间行
 FS_DLG_TITLE = 16.5    # 弹窗标题（bold）
-# 回退底色：WinUI Acrylic 关闭透明时的实心填充（深色 ≈ #2B2B2B，不透明）。
-# 注：圆角由 DWM「有框无边栏」窗口框架提供（apply_borderless_frame），不再自绘。
+# Toast/Dialog 底色：不透明实心深色卡片（与 maliang dark 卡片色一致的 #2B2B2B）。
 DLG_FALLBACK_BG = "#2B2B2B"
 
-# ---------------- 高 DPI（防模糊） ----------------
-SCALE = 1.0  # 系统缩放系数；声明 DPI 感知后按实际 DPI 放大 UI
-FONT = "Segoe UI"  # 在 Tk 创建后升级为 Segoe UI Variable（Windows 11 系统字体，缺失时自动回退）
+# ---------------- 高 DPI（防模糊；感知逻辑仅 Windows，其他平台空操作） ----------------
+SCALE = 1.0  # 系统缩放系数；声明 DPI 感知后按实际 DPI 放大 UI（detect_ui_scale 注入）
+FONT = None  # 在 Tk 创建后由 pick_font_family 按平台选定（缺失时回退 tkinter 默认）
 
 
 def pick_font_family(root):
-    """优先使用 Windows 11 系统字体 Segoe UI Variable，老系统回退 Segoe UI。"""
+    """按平台挑无衬线字体族（均含中文字形；缺失时 tkinter 自动回退默认字体）。"""
     try:
         fams = set(root.tk.call("font", "families"))
-        for fam in ("Segoe UI Variable Text", "Segoe UI Variable Display"):
+        if sys.platform == "darwin":
+            prefs = ("PingFang SC", "SF Pro Text", "Helvetica Neue")
+        elif sys.platform == "win32":
+            prefs = ("Segoe UI Variable Text", "Segoe UI Variable Display",
+                     "Segoe UI", "Microsoft YaHei UI")
+        else:
+            prefs = ("Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", "DejaVu Sans")
+        for fam in prefs:
             if fam in fams:
                 return fam
-        if "Segoe UI" in fams:
-            return "Segoe UI"
     except Exception:
         pass
-    return "Segoe UI"
+    return None  # None = maliang/tkinter 默认字体
 
 
 def sc(x):
@@ -130,33 +141,39 @@ def win_resize(win, w, h, x=None, y=None):
             pass
 
 
-def enable_dpi_awareness():
-    """让进程按显示器原生像素渲染。未声明时 Windows 会拉伸位图导致窗口模糊。"""
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_DPI_AWARE
-    except Exception:
+if IS_WINDOWS:
+    def enable_dpi_awareness():
+        """让进程按显示器原生像素渲染。未声明时 Windows 会拉伸位图导致窗口模糊。"""
         try:
-            ctypes.windll.user32.SetProcessDPIAware()
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_DPI_AWARE
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+
+    def detect_ui_scale():
+        try:
+            dpi = ctypes.windll.user32.GetDpiForSystem()
+            if dpi and dpi > 0:
+                return dpi / 96.0
         except Exception:
             pass
+        try:
+            hdc = ctypes.windll.user32.GetDC(0)
+            dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+            ctypes.windll.user32.ReleaseDC(0, hdc)
+            if dpi and dpi > 0:
+                return dpi / 96.0
+        except Exception:
+            pass
+        return 1.0
+else:
+    def enable_dpi_awareness():
+        pass  # 非 Windows：无此平台能力（tkinter 自行适配）
 
-
-def detect_ui_scale():
-    try:
-        dpi = ctypes.windll.user32.GetDpiForSystem()
-        if dpi and dpi > 0:
-            return dpi / 96.0
-    except Exception:
-        pass
-    try:
-        hdc = ctypes.windll.user32.GetDC(0)
-        dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
-        ctypes.windll.user32.ReleaseDC(0, hdc)
-        if dpi and dpi > 0:
-            return dpi / 96.0
-    except Exception:
-        pass
-    return 1.0
+    def detect_ui_scale():
+        return 1.0
 
 # ---------------- maliang 控件工厂 ----------------
 
@@ -191,82 +208,6 @@ def mlabel(cv, pos, size=None, text="", fg=C_TEXT, bg=None, ol=None,
     return lbl
 
 
-def try_dwm_round_corners(window):
-    """Win11 DWMWCP_ROUND：请求系统给窗口圆角（对无边框窗口尽力而为）。"""
-    try:
-        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
-        val = ctypes.c_int(2)  # DWMWCP_ROUND
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(val), ctypes.sizeof(val))
-    except Exception:
-        pass
-
-
-class _ACCENT_POLICY(ctypes.Structure):
-    _fields_ = [("AccentState", wintypes.DWORD), ("AccentFlags", wintypes.DWORD),
-                ("GradientColor", wintypes.DWORD), ("AnimationId", wintypes.DWORD)]
-
-
-class _WCA_DATA(ctypes.Structure):
-    _fields_ = [("Attribute", wintypes.DWORD), ("Data", ctypes.POINTER(_ACCENT_POLICY)),
-                ("SizeOfData", wintypes.ULONG)]
-
-
-def set_acrylic_blur(hwnd, tint=0xCC202020):
-    """手动实现亚克力：SetWindowCompositionAttribute(WCA_ACCENT_POLICY=19,
-    ACCENT_ENABLE_ACRYLICBLURBEHIND=4) + DwmExtendFrameIntoClientArea。
-
-    注：pywinstyles 1.8 的 acrylic 分支把 Attribute 误传为 30（应为 19），
-    经 maliang.theme.apply_theme 调用时实际不生效，故此处直接 ctypes 实现。
-    tint 为 AARRGGBB：CC(80% 不透明) 的 #202020 深色染色，近似 WinUI
-    AcrylicBackgroundFillColorDefault（深色）。"""
-    pol = _ACCENT_POLICY(4, 0, tint, 0)          # 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND
-    data = _WCA_DATA(19, ctypes.pointer(pol), ctypes.sizeof(pol))  # 19 = WCA_ACCENT_POLICY
-    ok = ctypes.windll.user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data))
-    if not ok:
-        return False
-    margins = (ctypes.c_int * 4)(-1, -1, -1, -1)  # 玻璃框架扩展至整个客户区
-    ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
-    return True
-
-
-def try_apply_acrylic(window):
-    """对窗口应用磨砂玻璃（tkinter/GDI 窗口的可达上限）：
-
-    1. apply_borderless_frame：改造为「有框无边栏」窗口（WS_THICKFRAME 去标题栏）
-       → DWM 绘制系统 8px 圆角 + 真实投影 + 深色边框
-    2. set_acrylic_blur：ACCENT_ENABLE_ACRYLICBLURBEHIND 亚克力模糊 + 深色染色
-
-    注：Win11 的 DWMWA_SYSTEM_BACKDROP_TYPE（38，Win 键面板同源材质）对 GDI
-    窗口无视觉效果——它要求 DirectComposition 内容（像素带 alpha），而 tkinter
-    每个像素都不透明，会直接盖住材质，API 却仍返回成功。故不采用。"""
-    if not accent_api_alive():
-        # Windows 更新后 SetWindowCompositionAttribute 可能整体失效（返回成功但不渲染，
-        # Win 26200 实证：GRADIENT 纯红也不上屏）——黑底无亚克力替换=Toast 黑屏，
-        # 必须走不透明卡片回退。
-        return False
-    hwnd = apply_borderless_frame(window)
-    if hwnd:
-        if set_acrylic_blur(hwnd, tint=0xD9202020):
-            window.configure(bg="#000000")
-            return True
-    try:
-        window.update_idletasks()
-        window.update()
-        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
-        if not hwnd:
-            return False
-        if not set_acrylic_blur(hwnd, tint=0xD9202020):
-            return False
-        window.configure(bg="#000000")
-        return True
-    except Exception:
-        return False
-
-
-# ---- SetWindowCompositionAttribute 存活探测（进程内缓存一次） ----
-_ACCENT_API_STATE = {"state": None}  # None=未测 / True=活着 / False=失效
-
-
 def _diag(line):
     """生产环境取证：探测/Toast 分支决策追加写日志（只诊断用，异常静默）。"""
     try:
@@ -278,144 +219,7 @@ def _diag(line):
         pass
 
 
-def _make_probe_windows():
-    """造一对探针窗口（白底 + 红色 GRADIENT 覆盖窗），返回两 hwnd。"""
-    user32 = ctypes.windll.user32
-    holder = tk.Toplevel()
-    holder.withdraw()
-    bg = tk.Toplevel(holder)
-    bg.overrideredirect(True)
-    bg.geometry("+%d+%d" % (max(user32.GetSystemMetrics(0) - 240, 40), 80))
-    bg.geometry("160x120")
-    bg.configure(bg="#FFFFFF")
-    bg.attributes("-topmost", True)
-    fg = tk.Toplevel(holder)
-    fg.overrideredirect(True)
-    fg.geometry("+%d+%d" % (max(user32.GetSystemMetrics(0) - 220, 60), 100))
-    fg.geometry("120x80")
-    fg.configure(bg="#000000")
-    fg.attributes("-topmost", True)
-    bg.update_idletasks(); bg.update()
-    fg.update_idletasks(); fg.update()
-    hb = user32.GetParent(bg.winfo_id())
-    hf = user32.GetParent(fg.winfo_id())
-    return holder, bg, fg, hb, hf
-
-
-def accent_api_alive(force=False):
-    """探测 SetWindowCompositionAttribute 是否真的在渲染（而非仅返回成功）。
-
-    方法：纯白底上叠一个 ACCENT_ENABLE_GRADIENT(1) 不透明纯红窗——GRADIENT 是
-    最古老的 accent 状态，若连它都不渲染（采样仍白），说明整个未文档化 API 在
-    当前 Windows 构建上已失效（亚克力必然同样失效）。结果进程内缓存。
-    沙箱/无桌面环境下 GetPixel 失败时按「存活」处理（保持旧行为）。"""
-    if _ACCENT_API_STATE["state"] is not None and not force:
-        return _ACCENT_API_STATE["state"]
-    state = True  # 探测失败按存活处理（与历史行为一致）
-    try:
-        user32 = ctypes.windll.user32
-        gdi32 = ctypes.windll.gdi32
-        holder, bg, fg, hb, hf = _make_probe_windows()
-        try:
-            # 红：A=FF R=FF → GradientColor 字节序 ABGR → 0xFF0000FF
-            pol = _ACCENT_POLICY(1, 0, 0xFF0000FF, 0)
-            data = _WCA_DATA(19, ctypes.pointer(pol), ctypes.sizeof(pol))
-            ok = user32.SetWindowCompositionAttribute(hf, ctypes.byref(data))
-            if ok:
-                fg.update()
-                _time.sleep(0.35)
-                fg.update()
-                hdc = user32.GetDC(0)
-                try:
-                    # 采样红窗中心（物理坐标）
-                    left = fg.winfo_rootx()
-                    top = fg.winfo_rooty()
-                    px = gdi32.GetPixel(hdc, left + fg.winfo_width() // 2,
-                                         top + fg.winfo_height() // 2)
-                finally:
-                    user32.ReleaseDC(0, hdc)
-                r = px & 0xFF
-                g = (px >> 8) & 0xFF
-                b = (px >> 16) & 0xFF
-                # 白底+黑窗都被红色 GRADIENT 覆盖才认为活着（采样到白/黑=没渲染）
-                if r > 180 and g < 90 and b < 90:
-                    state = True
-                else:
-                    state = False
-                _diag("probe ok=%s px=0x%08X rgb=(%d,%d,%d) → alive=%s" % (
-                    bool(ok), px & 0xFFFFFFFF if px >= 0 else px, r, g, b, state))
-        finally:
-            try:
-                holder.destroy()
-            except Exception:
-                pass
-    except Exception as e:
-        state = True
-        _diag("probe EXCEPTION %r → alive=True(默认)" % (e,))
-    _ACCENT_API_STATE["state"] = state
-    if not state:
-        print("timetable helper: SetWindowCompositionAttribute 已失效（本 Windows 构建不渲染 accent），"
-              "Toast 回退为不透明深色卡片", file=sys.stderr)
-    return state
-
-
-# ---- Win11 系统 backdrop（Shell 同源材质） ----
-GWL_STYLE = -16
-GWL_EXSTYLE = -20
-WS_THICKFRAME = 0x00040000
-WS_SYSMENU = 0x00080000
-WS_CAPTION = 0x00C00000
-WS_MINIMIZEBOX = 0x00020000
-WS_MAXIMIZEBOX = 0x00010000
-WS_EX_TOOLWINDOW = 0x00000080
-SWP_NOSIZE = 0x0001
-SWP_NOMOVE = 0x0002
-SWP_NOZORDER = 0x0004
-SWP_NOACTIVATE = 0x0010
-SWP_FRAMECHANGED = 0x0020
-DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-DWMWA_WINDOW_CORNER_PREFERENCE = 33
-
-
-def _dwm_set(hwnd, attr, value):
-    val = ctypes.c_int(value)
-    return ctypes.windll.dwmapi.DwmSetWindowAttribute(
-        hwnd, attr, ctypes.byref(val), ctypes.sizeof(val)) == 0
-
-
-def apply_borderless_frame(window):
-    """改造为「有框无边栏」窗口：保留 WS_THICKFRAME、去掉 WS_CAPTION。
-
-    - DWM 依 thickframe 绘制系统 8px 圆角（DWMWCP_ROUND）与投影阴影
-    - 深色沉浸模式（边框/标题区按深色渲染）
-    - WS_EX_TOOLWINDOW：不进任务栏/Alt+Tab（同系统弹窗行为）
-    返回 hwnd（失败返回 None）。"""
-    try:
-        window.overrideredirect(False)
-        window.attributes("-topmost", True)
-        window.update_idletasks()
-        window.update()
-        user32 = ctypes.windll.user32
-        hwnd = user32.GetParent(window.winfo_id())
-        if not hwnd:
-            return None
-        # 有框无边栏：DWM 需要 thickframe 才绘制圆角/阴影，但不显示标题栏
-        style = user32.GetWindowLongW(hwnd, GWL_STYLE)
-        style = (style | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX) & ~WS_CAPTION
-        user32.SetWindowLongW(hwnd, GWL_STYLE, style)
-        ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW)
-        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)
-        window.update()
-        _dwm_set(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1)
-        _dwm_set(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, 2)  # DWMWCP_ROUND（8px）
-        return hwnd
-    except Exception:
-        return None
-
-
-# ---------------- Win32 全局快捷键 ----------------
+# ---------------- Win32 全局快捷键（平台相关能力之一，仅 Windows 生效） ----------------
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
@@ -452,36 +256,43 @@ def parse_hotkey(spec):
         return None
 
 
-def hotkey_thread_main(msg_q, spec):
-    """注册全局热键并在收到 WM_HOTKEY 时向 UI 队列投递事件；线程用 WM_QUIT 退出。"""
-    user32 = ctypes.windll.user32
-    parsed = parse_hotkey(spec)
-    if not parsed:
-        msg_q.put(("hotkey_fail", str(spec)))
-        return
-    mods, vk = parsed
-    if not user32.RegisterHotKey(None, HOTKEY_ID, mods, vk):
-        msg_q.put(("hotkey_fail", str(spec)))
-        return
-    msg = wintypes.MSG()
-    try:
-        while True:
-            ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
-            if ret == 0 or ret == -1:
-                break
-            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
-                msg_q.put(("hotkey", None))
-    finally:
-        user32.UnregisterHotKey(None, HOTKEY_ID)
+if IS_WINDOWS:
+    def hotkey_thread_main(msg_q, spec):
+        """注册全局热键并在收到 WM_HOTKEY 时向 UI 队列投递事件；线程用 WM_QUIT 退出。"""
+        user32 = ctypes.windll.user32
+        parsed = parse_hotkey(spec)
+        if not parsed:
+            msg_q.put(("hotkey_fail", str(spec)))
+            return
+        mods, vk = parsed
+        if not user32.RegisterHotKey(None, HOTKEY_ID, mods, vk):
+            msg_q.put(("hotkey_fail", str(spec)))
+            return
+        msg = wintypes.MSG()
+        try:
+            while True:
+                ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+                if ret == 0 or ret == -1:
+                    break
+                if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
+                    msg_q.put(("hotkey", None))
+        finally:
+            user32.UnregisterHotKey(None, HOTKEY_ID)
 
+    def stop_hotkey_thread(thread):
+        try:
+            if thread is not None and thread.is_alive():
+                ident = thread.ident
+                if ident:
+                    ctypes.windll.user32.PostThreadMessageW(ident, WM_QUIT, 0, 0)
+        except Exception:
+            pass
+else:
+    def hotkey_thread_main(msg_q, spec):
+        """非 Windows：无全局热键（不调用平台私有接口），显隐由宿主 show/hide 命令控制。"""
+        return
 
-def stop_hotkey_thread(thread):
-    try:
-        if thread is not None and thread.is_alive():
-            ident = thread.ident
-            if ident:
-                ctypes.windll.user32.PostThreadMessageW(ident, WM_QUIT, 0, 0)
-    except Exception:
+    def stop_hotkey_thread(thread):
         pass
 
 
@@ -518,12 +329,12 @@ def stdin_thread_main(cmd_q):
 TYPE_LABEL = {"weekly": "每周重复", "once": "一次性", "custom": "自定义间隔"}
 
 
-# ---------------- Toast 弹窗（仿 Windows 原生通知，全 maliang 控件） ----------------
+# ---------------- Toast 弹窗（仿系统通知，全 maliang 控件） ----------------
 class Toast:
-    """全部由 ma.Label / ma.Button 绘制（无 tk 子控件），保证亚克力能透出。
+    """无边框深色卡片：全部由 ma.Label / ma.Button 绘制（无 tk 子控件）。
 
-    - 亚克力可用：窗口底为黑色（被 DWM 替换为模糊），各控件芯片也设为黑色 → 真·Win11 质感
-    - 不可用：回退为透明色抠角 + 半透明圆角卡片
+    不调用任何系统合成器/窗口框架接口（历史 Win11 亚克力/DWM 材质分支已移除），
+    同一份代码在 Windows/macOS/Linux 上行为一致。
     """
     WIDTH = 372
     DURATION = 30.0  # 自动关闭秒数（悬停时暂停，同 Windows 行为）
@@ -546,37 +357,18 @@ class Toast:
                                      position=(2000, 2000), focus=False)
         win.attributes("-topmost", True)
 
-        # 系统 backdrop 内部会做 overrideredirect(False)+有框无边栏改造；
-        # 亚克力不可用时同样走「有框无边栏」——DWM 系统圆角/投影/1px 边框，
-        # 整窗即卡片，不依赖任何透明 API。
-        # 不再使用 -transparentcolor 抠角：Win11 26200 实证 color-key 与 accent
-        # API 同步失效（整窗显示 MAGIC 近黑底 = 「全黑直角框」线上事故）。
-        self.acrylic = try_apply_acrylic(win)
-        _diag("Toast '%s' acrylic=%s（True=黑底材质分支 / False=深色卡片回退）" % (
-            str(ev.get("title", ""))[:20], self.acrylic))
-        base = "#000000" if self.acrylic else DLG_FALLBACK_BG  # 控件芯片与底同色
-        if not self.acrylic:
-            # 磨砂不可用 → WinUI 规范回退：不透明实心深色卡片（非半透明）。
-            # 底色与窗口 bg 同色（maliang dark 主题 #202020）：THICKFRAME 改造后
-            # 客户区外缘 1-2px 由窗口 bg 露出，两色不一致会出现"描边"式色差。
-            win.configure(bg=DLG_FALLBACK_BG)
-            if apply_borderless_frame(win) is None:
-                # 兜底：borderless 改造失败（极少数环境）→ 原生无边框直角窗
-                win.overrideredirect(True)
-                win.attributes("-topmost", True)
-        else:
-            # 透明度：材质模式下窗口 alpha=1.0，层次感由 DWM 材质提供
-            try_dwm_round_corners(win)  # 系统圆角（Win11 浮层规范 8px）
-            # 窗口完成映射后再补设一次（部分机型首次设置早于映射会被忽略）
-            win.after(120, lambda: self.win.winfo_exists() and try_dwm_round_corners(self.win))
+        # 跨平台无边框通知卡片：不调用任何系统合成器/DWM 接口（历史 Win11 亚克力
+        # 材质分支已随「UI 不调用 Windows 接口」约束整体移除），统一为不透明深色卡片。
+        self.mode = "card"
+        _diag("Toast '%s' mode=card" % str(ev.get("title", ""))[:20])
+        base = DLG_FALLBACK_BG  # 不透明实心深色卡片（非半透明）
+        win.configure(bg=base)
+        win.overrideredirect(True)  # 无边框（tkinter 跨平台能力）；窗口不进任务栏
 
         # auto_update=False：阻止 maliang 主题管理器把画布重绘成主题默认 #202020
-        # （回退分支曾被改写：canvas=#202020 vs 文字芯片=#2B2B2B 两种灰并存，
-        # 亚克力分支则是防重绘盖住模糊）——颜色一律显式指定
+        # （画布底色与文字芯片色必须一致，否则出现"描边"式色差）——颜色一律显式指定
         cv = self.cv = ma.Canvas(win, expand="xy", bg=base, highlightthickness=0, bd=0,
                                  auto_update=False)
-        if self.acrylic:
-            cv.configure(bg="#000000")
         chip = base  # 文字芯片与底同色 → 隐形，仅文字可见
         # 布局（关键）：maliang Canvas 继承 tk.Canvas，expand 参数只服务于
         # zoom 缩放，不提供布局——不显式 place 时恒为 1×1，文字/进度条全部
@@ -601,7 +393,7 @@ class Toast:
                    fg=C_MUTE, bg=chip, size_text=FS_DLG_CAPTION)
 
         # 底部倒计时进度条（canvas 矩形项，芯片太小不适合圆角控件）
-        bar_bg_fill = "#333333" if self.acrylic else "#3D3D3D"
+        bar_bg_fill = "#3D3D3D"
         p = sc(PAD)
         self._bar_x0, self._bar_w = p, width - p * 2
         self._bar_y = height - zsc(8)
@@ -635,7 +427,7 @@ class Toast:
                                x2, self._bar_y + zsc(3))
             except Exception:
                 return
-        self.win.after(200, self._tick_progress)
+        self.win.after(100, self._tick_progress)
 
     def _set_paused(self, paused):
         if paused and not self.paused:
@@ -679,13 +471,14 @@ class App:
         root.title("当日日程提醒")
         win_resize(root, sc(self.WIN_W), sc(self.WIN_H))
         root.minsize(sc(340), sc(300))
-        root.overrideredirect(True)  # 无边框：标题栏自绘（maliang 控件），可拖动
+        root.overrideredirect(True)  # 无边框：标题栏自绘（maliang 控件），可拖动（tkinter 跨平台能力）
         root.configure(bg=C_BG)
-        root.attributes("-alpha", GLASS_ALPHA)
+        try:
+            root.attributes("-alpha", GLASS_ALPHA)  # 部分平台/WM 不支持窗口透明：失败不致命
+        except Exception:
+            pass
 
         self._build_ui()
-        try_dwm_round_corners(root)  # 主窗口也走系统圆角
-        root.after(150, lambda: root.winfo_exists() and try_dwm_round_corners(root))
         root.protocol("WM_DELETE_WINDOW", self.hide)  # 关闭 = 隐藏，进程常驻继续提醒
 
         self.apply_hotkey(self.cfg.get("hotkey", "ctrl+alt+t"))
@@ -734,6 +527,18 @@ class App:
         self.list_cv.pack(fill="both", expand=True, padx=(sc(PAD - 4), sc(PAD - 4)),
                           pady=(0, sc(4)))
         self.list_cv.bind_all("<MouseWheel>", self._on_wheel)
+        self.list_cv.bind_all("<Button-4>", self._on_wheel_x11)  # X11/Linux 滚轮上
+        self.list_cv.bind_all("<Button-5>", self._on_wheel_x11)  # X11/Linux 滚轮下
+
+    def _on_wheel_x11(self, e):
+        """X11/Linux 滚轮（Button-4/5 事件，无 delta）；Ctrl+滚轮同样缩放字号。"""
+        if e.state & 0x0004:
+            self.zoom(e.num == 4)
+            return
+        try:
+            self.list_cv.yview_scroll(-1 if e.num == 4 else 1, "units")
+        except Exception:
+            pass
 
     def _on_wheel(self, e):
         if e.state & 0x0004:  # Ctrl 按下：缩放字号（同浏览器行为）
@@ -919,6 +724,8 @@ class App:
     def apply_hotkey(self, spec):
         stop_hotkey_thread(self.hotkey_thread)
         self.hotkey_error = None
+        if not IS_WINDOWS:
+            return  # 非 Windows：无全局热键（宿主 show/hide 命令控制显隐）
         self.hotkey_thread = threading.Thread(target=hotkey_thread_main, args=(self.ui_q, spec), daemon=True)
         self.hotkey_thread.start()
 
@@ -1096,14 +903,14 @@ def main():
         sys.exit(run_headless())
 
     global SCALE, FONT
-    enable_dpi_awareness()  # 必须在创建 Tk 之前：按原生像素渲染，避免高 DPI 下发糊
+    enable_dpi_awareness()  # 必须在创建 Tk 之前：按原生像素渲染防发糊（仅 Windows，其他平台空操作）
     try:
-        ma_theme.set_color_mode("dark")  # maliang 全局深色主题（Win11 深色一致）
+        ma_theme.set_color_mode("dark")  # maliang 全局深色主题
     except Exception:
         pass
     root = ma.Tk(title="当日日程提醒")
     SCALE = detect_ui_scale()
-    FONT = pick_font_family(root)  # Segoe UI Variable（Win11）→ Segoe UI 回退
+    FONT = pick_font_family(root)  # 平台无衬线字体（缺失时回退 tkinter 默认）
     cfg = {
         "dataPath": os.environ.get("DSH_TTR_DATA", "D:/tools/auto_timetable/schedule.json"),
         "hotkey": os.environ.get("DSH_TTR_HOTKEY", "ctrl+alt+t"),

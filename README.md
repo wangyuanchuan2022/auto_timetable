@@ -8,7 +8,7 @@
 
 | 模块 | 入口 | 说明 |
 | --- | --- | --- |
-| **桌面端提醒** | `reminder_app.py`（独立桌面应用）/ `start_reminder.bat` / `reminder-plugin/`（DSH 插件 `dsh-timetable-reminder`） | 主窗口列出当日日程，按事件 `remindLead` 提前弹窗提醒（`0` = 不提醒；留空回落默认 30/10 分钟双档）；后台常驻，全局快捷键 Ctrl+Alt+T 显隐；插件版另提供 Windows 原生 Toast（亚克力效果）唤醒弹窗，依赖 `reminder-plugin/runtime/helper.py` |
+| **桌面端提醒** | `reminder-plugin/`（DSH 插件 `dsh-timetable-reminder`，`runtime/helper.py`） | DSH 宿主托管的桌面日程窗口（UI 基于**跨平台库 maliang**，Windows/macOS/Linux 同源可跑）：列出当日日程，按事件 `remindLead` 提前弹卡片 Toast（`0` = 不提醒；留空回落默认 30/10 分钟双档）；后台常驻，全局快捷键 Ctrl+Alt+T 显隐（**仅 Windows**，其他平台由宿主 show/hide 命令控制） |
 | **手机连接** | `mobile-server.mjs` / `mobile.html` / `sw.js` / `mobile-plugin/`（DSH 插件 `dsh-timetable-mobile`） | 独立手机访问服务（默认端口 3190）：功能入口仅 **Cloudflare 隧道 HTTPS + 安全密码**（直连端口 3190 已全量收口——对所有来源只显示隧道地址引导页）：扫码打开手机页查看/编辑日程、Web Push 系统级提醒、直连电脑端 DSH AI 对话；插件版随 DSH web 启动/关闭自动拉起与回收，崩溃自动守护重启 |
 | **日程表智能** | `schedule.html` / `schedule.json` / `qrgen.js` / `manifest.webmanifest` / 图标 | 以「周」为单位的日程表交互页面（明暗主题自适应）：单击详情、双击编辑，「＋ 新建」/双击空白格新建事件，直接写回 `schedule.json`，并内嵌手机访问二维码面板；支持事件级**例外日期（`skip` 停课/调休）与单双周（`weekPattern`）**、`termStart` **教学周徽标**、**历史归档查看/恢复**、**导入 JSON / 导出 JSON 备份 / 导出 ICS 日历**（未来 8 周展开，可直接订阅到系统日历）；支持**长周期截止任务（`task` 型）**——集中在周视图右侧「截止任务」侧栏（按截止日排序、按紧急度分级配色），截止当日网格列顶部以红色横幅醒目标出 |
 
@@ -32,18 +32,12 @@
 
 ### 2. 桌面端提醒
 
-**独立桌面应用**（纯标准库，无第三方依赖）：
-
-```bash
-python reminder_app.py        # 或双击 start_reminder.bat（pythonw 后台常驻）
-```
-
-**DSH 插件版 `dsh-timetable-reminder`**（Windows 11 原生 Toast / 亚克力效果）：
+**DSH 插件 `dsh-timetable-reminder`**（桌面日程窗口 + 卡片 Toast；UI 全部基于跨平台库 maliang，界面层不调用任何操作系统私有接口）：
 
 ```bash
 cd reminder-plugin
 pnpm install                  # 宿主插件桥接依赖（@deepseek-ai/schemastery）
-pip install maliang           # Python helper 的 UI 依赖（亚克力弹窗；pywinstyles/win32material 为可选增强，代码未直接依赖）
+pip install maliang           # Python helper 的 UI 依赖（>=3.1）
 ```
 
 注册进 DSH profile（与 dsh-worktable 同一安装方式）：编辑 `~/.dsh/profiles/web/package.json`——
@@ -357,5 +351,5 @@ node mobile-server.mjs --host 127.0.0.1   # 仅绑定本机（公网完全不监
 - **重启 DSH web 报 `profile bundle "…" declares no dsh.bundle in its package.json`**：bundle 契约缺失——插件 `package.json` 必须声明 `"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }` 且包根目录存在 `cordis.patch.yml`，详见「安装与运行 · 2」的契约必读段。
 - **二维码不显示 / 一直「获取中…」**：面板正在探测端口（3190–3199）等待 `/api/status` 就绪，约 3 秒；仍未出现就点「收起」再展开「手机访问」重新触发，或按上一条手动启动服务。
 - **手机扫码打不开 / 连不上**：① 确认电脑端 cloudflared 隧道在运行、面板显示的隧道地址与手机访问的一致（配置见 `CLOUDFLARED-SETUP.md`）；② 密码连续输错触发限速（60 秒 5 次即锁 10 分钟起、逐次翻倍），等锁定结束再试；③ 新部署首启的随机密码只在服务启动日志里显示一次，找不到就在本机面板重新设置。
-- **桌面提醒不弹**：按 Ctrl+Alt+T 唤出主窗口确认程序在运行；窗口无响应可能是热键被其他程序占用（启动时会提示「Ctrl+Alt+T 注册失败」）——关掉占用程序后重启；插件版可用 `DSH_TTR_SHOW_ON_START=1 python runtime/helper.py` 带窗口验证。
+- **桌面提醒不弹**：按 Ctrl+Alt+T（仅 Windows；其他平台由宿主 show/hide 控制）唤出主窗口确认 helper 在运行；热键无响应可能是被其他程序占用（启动时会提示「Ctrl+Alt+T 注册失败」）——关掉占用程序后重启；可用 `DSH_TTR_SHOW_ON_START=1 python runtime/helper.py` 带窗口验证。
 - **桌面提醒窗口顶部出现「⚠ 日程数据文件损坏或不可读」**：`schedule.json` 语法损坏或不可读（此时列表为空），用编辑器修复 JSON 语法后窗口每分钟自动重读恢复。
