@@ -266,12 +266,19 @@ const TASK_FAR = fmtDate((() => { const d = new Date(NOW); d.setDate(d.getDate()
   check('≤3 天橙色分级（--soon + 还剩 2 天）', taskCards[2].className.indexOf('tt-task--soon') > -1 && taskCards[2].textContent.indexOf('还剩 2 天') > -1);
   check('远期蓝色分级（--later）', taskCards[3].className.indexOf('tt-task--later') > -1);
   const banners = h.collect(h.grid, (e) => e.classList.contains('tt-duebanner'));
-  // 注：「后天截止」是否同周随运行日变化（周一~五同周 → 2 条横幅；周六/日 → 1 条），
-  // 故按内容断言今天截止的横幅存在且唯一，不锁横幅总数。
-  const todayBanners = banners.filter((b) => b.textContent.indexOf('今天截止任务') > -1);
-  const knownBanners = banners.every((b) => b.textContent.indexOf('今天截止任务') > -1 || b.textContent.indexOf('后天截止任务') > -1);
-  check('截止当日网格列顶红色横幅（醒目标记）', todayBanners.length === 1 && knownBanners);
-  banners[0].onclick();
+  // 横幅集合随「截止日是否落在当前可见周」而变（运行日敏感——修复既有失败：周四~周日运行时
+  // 逾期任务(-3 天)也落在本周且 DOM 序最前，旧用例 banners[0] 会点到它导致两条断言连坏）：
+  //   逾期任务(-3 天)：仅周四~周日（WD≥4）落本周；后天截止(+2 天)：仅周一~周五（WD≤5）落本周。
+  // 断言改为「横幅集合 = 按运行日推导的期望集合」，点横幅用例显式取「今天截止」那条。
+  const expectedBanners = ['今天截止任务'];
+  if (WD >= 4) expectedBanners.unshift('逾期任务');
+  if (WD <= 5) expectedBanners.push('后天截止任务');
+  check('截止当日网格列顶红色横幅（醒目标记；按运行日推导期望集合）',
+    banners.length === expectedBanners.length
+    && expectedBanners.every((t) => banners.some((b) => b.textContent.indexOf(t) > -1)),
+    `banners=${JSON.stringify(banners.map((b) => b.textContent))}`);
+  const todayBanner = banners.find((b) => b.textContent.indexOf('今天截止任务') > -1);
+  todayBanner.onclick();
   check('点横幅打开任务详情（截止时间醒目）',
     h.byId.detailPanel.style.display === 'block' && h.byId.dTime.textContent.indexOf('截止 ' + TODAY) > -1 && h.byId.dTime.textContent.indexOf('今天截止') > -1);
   check('统计卡含「截止任务」= 4', h.byId.ttStats.textContent.indexOf('截止任务') > -1 && /截止任务\s*4/.test(h.byId.ttStats.textContent));
