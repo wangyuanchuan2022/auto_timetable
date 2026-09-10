@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand">#FF4F6EF7</color>
+    <color name="on_brand">#FFFFFFFF</color>
+    <color name="bg">#FF0B0E14</color>
+    <color name="text">#FFE6E8EB</color>
+    <color name="muted">#FF9AA4B2</color>
+    <color name="field_bg">#FF161B24</color>
+</resources>

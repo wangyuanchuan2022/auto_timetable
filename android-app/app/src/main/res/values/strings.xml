@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">日程</string>
+    <string name="pair_title">日程安排</string>
+    <string name="pair_hint">扫码连接电脑端课表服务，或手动输入服务器地址。\n电脑端：打开日程面板 →「公网访问」二维码。</string>
+    <string name="btn_scan">扫码连接</string>
+    <string name="pair_or">或手动输入服务器地址</string>
+    <string name="url_hint">https://xxxx.trycloudflare.com</string>
+    <string name="btn_connect">连接</string>
+    <string name="pair_note">提示：电脑重启后隧道地址可能变化，届时在 APP 内重新扫码即可。</string>
+    <string name="btn_retry">重试</string>
+    <string name="btn_rescan">重新扫码</string>
+    <string name="btn_reinput">手动输入地址</string>
+    <string name="error_title">连接不上电脑端</string>
+</resources>

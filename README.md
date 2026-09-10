@@ -9,7 +9,7 @@
 | 模块 | 入口 | 说明 |
 | --- | --- | --- |
 | **桌面端提醒** | `reminder-plugin/`（DSH 插件 `dsh-timetable-reminder`，`runtime/helper.py`） | DSH 宿主托管的桌面日程窗口（UI 基于**跨平台库 maliang**，Windows/macOS/Linux 同源可跑）：列出当日日程，按事件 `remindLead` 提前弹卡片 Toast（`0` = 不提醒；留空回落默认 30/10 分钟双档）；后台常驻，全局快捷键 Ctrl+Alt+T 显隐（**仅 Windows**，其他平台由宿主 show/hide 命令控制） |
-| **手机连接** | `mobile-server.mjs` / `mobile.html` / `sw.js` / `mobile-plugin/`（DSH 插件 `dsh-timetable-mobile`） | 独立手机访问服务（默认端口 3190）：功能入口仅 **Cloudflare 隧道 HTTPS + 安全密码**（直连端口 3190 已全量收口——对所有来源只显示隧道地址引导页）：扫码打开手机页查看/编辑日程、Web Push 系统级提醒、直连电脑端 DSH AI 对话；插件版随 DSH web 启动/关闭自动拉起与回收，崩溃自动守护重启 |
+| **手机连接** | `mobile-server.mjs` / `mobile.html` / `sw.js` / `mobile-plugin/`（DSH 插件 `dsh-timetable-mobile`）/ `android-app/`（安卓 APK） | 独立手机访问服务（默认端口 3190）：功能入口仅 **Cloudflare 隧道 HTTPS + 安全密码**（直连端口 3190 已全量收口——对所有来源只显示隧道地址引导页）：扫码打开手机页查看/编辑日程、Web Push 系统级提醒、直连电脑端 DSH AI 对话；**安卓 APP**（原生 WebView 壳）打包全部移动端功能：扫码配对隧道地址、原生精确闹钟课前弹窗提醒（不依赖谷歌服务）；插件版随 DSH web 启动/关闭自动拉起与回收，崩溃自动守护重启 |
 | **日程表智能** | `schedule.html` / `schedule.json` / `qrgen.js` / `manifest.webmanifest` / 图标 | 以「周」为单位的日程表交互页面（明暗主题自适应）：单击详情、双击编辑，「＋ 新建」/双击空白格新建事件，直接写回 `schedule.json`，并内嵌手机访问二维码面板；支持事件级**例外日期（`skip` 停课/调休）与单双周（`weekPattern`）**、`termStart` **教学周徽标**、**历史归档查看/恢复**、**导入 JSON / 导出 JSON 备份 / 导出 ICS 日历**（未来 8 周展开，可直接订阅到系统日历）；支持**长周期截止任务（`task` 型）**——集中在周视图右侧「截止任务」侧栏（按截止日排序、按紧急度分级配色），截止当日网格列顶部以红色横幅醒目标出 |
 
 > **手机端编辑**同样支持完整字段：名称/起止时间/地点/备注/提前提醒/截止日期，以及**例外日期与单双周**；对话框内可**两段式删除**事件。任务（`task` 型）在手机端于截止当日出现在当日列表（红字「截止」标），对话框编辑时隐藏起止时间、必填截止日期。
@@ -60,6 +60,17 @@ node mobile-server.mjs --host 127.0.0.1  # 仅绑定本机
 
 在 `schedule.html` 工具栏点「手机访问」显示二维码，手机扫码即用。`mobile-plugin/` 为其 DSH 生命周期插件（注册方式同上：`dependencies` 用 `link:` 指向 `mobile-plugin/` + `dsh.profile.bundles` 加 `dsh-timetable-mobile` + `pnpm install`，需同样满足 bundle 契约），安装后随 DSH 自动启停。
 
+### 3.1 安卓 APP（android-app/）
+
+原生 Kotlin WebView 壳，把移动端页面装成 APK，并补上浏览器给不了的两件事：
+
+- **扫码配对**：APP 内「扫码连接」直接扫 `schedule.html` 面板上的「公网访问」二维码（zxing-embedded，不依赖谷歌服务）；电脑重启后隧道地址变化时重新扫码即可；
+- **课前弹窗提醒**：APP 周期拉取服务端 `GET /api/plan`（提醒时刻由服务端 occur.js 单一实现算好），逐条交给系统 **AlarmManager 精确闹钟**，到点弹高优先级横幅通知——不依赖 FCM/谷歌服务，国内 ROM 锁屏/后台可收；PC 关机期间已排闹钟照常响。
+
+其余功能（课表查看/编辑、DSH AI 对话、图片附件、模型切换）即 WebView 里的移动页本身，与浏览器完全同源。鉴权复用页面登录种下的 30 天会话 Cookie，无需二次输密码。
+
+构建：用 Android Studio 打开 `android-app/` 直接 Build，或按 `android-app/BUILD.md` 命令行构建（SDK/Gradle 大文件下载在用户终端完成）。
+
 ### 4. 回归测试
 
 ```bash
@@ -92,6 +103,7 @@ node .qrtest/chat-setup-test.mjs                  # 系统设定注入/剥离（
 | `TTPROMPT.md` | **注入提示词的唯一权威来源**（当前含手机端对话系统设定）：`chat-setup.mjs` 运行时按「## 手机端对话系统设定」章节锚定加载（mtime 缓存），直接编辑其中代码块即生效，无需改代码/重启；文件暂坏时沿用上一次成功内容并告警，从未成功则显式报错——代码内无提示词副本 |
 | `qrgen.js` | 自包含二维码生成器（字节模式 / 纠错 M / 版本 1-10），供 `schedule.html` 本地渲染二维码 |
 | `schedule.json` | 日程数据文件，**用任意编辑器直接改它即可** |
+| `android-app/` | 安卓 APK 工程（原生 WebView 壳：扫码配对 + 精确闹钟课前提醒），构建说明见 `android-app/BUILD.md` |
 | `.qrtest/run-test.js` | `qrgen.js` 的回环测试（用 jsQR 解码验证，`npm i --prefix .qrtest jsqr` 后 `node .qrtest/run-test.js`） |
 | `.qrtest/remind-test.js` | 提醒判定逻辑回环测试（从 `mobile.html` 提取真实代码执行，`node .qrtest/remind-test.js`） |
 | `README.md` | 本说明文档 |

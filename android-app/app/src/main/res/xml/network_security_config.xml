@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- 允许明文 http：支持手动输入局域网地址（如 http://192.168.x.x:3191）。
+         公网隧道地址为 HTTPS，不受影响。 -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
