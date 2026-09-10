@@ -11,6 +11,7 @@
 >   ```
 > - **重启电脑后**：DSH 插件会拉起 mobile-server；cloudflared 需双击上面的 cmd（或已复制进启动文件夹则全自动）
 > - **常见日志现象**（`.mobile-srv\tunnel.log`）：`Failed to refresh DNS local resolver region1...` 每 5 分钟一条 = Windows 下 cloudflared 本地 DNS 刷新怪癖，边缘连接不受影响，可忽略；`stream canceled by remote` = 手机端锁屏/离开页面主动断开 SSE，非故障；`Unable to reach the origin service` = mobile-server 掉线（守护会在 10 秒内重启它）
+> - **进程活但隧道断线**（2026-09-10 实证：公网侧 TLS 握手失败/无边缘连接，守护只查进程存在性救不了）：`Stop-Process -Name cloudflared -Force` 杀掉僵死实例，再运行 `node .qrtest\spawn-cloudflared-via-worktable.mjs` 经宿主通道重启守护（直接 Start-Process 会被沙箱 job-object 回收）；新 URL 约 10 秒内写入 tunnel.log 并被服务端自动发现，**地址会变，APP/手机书签需重新扫码**
 > - 之后有域名了，按下方 named tunnel 步骤升级为固定 URL（手机书签/PWA 不再因重启失效）。
 
 架构：手机 → `https://<隧道地址>`（CF 边缘，TLS）→ cloudflared（本机常驻，出站连接）→ `127.0.0.1:3191`（mobile-server 隧道回连端口）。
