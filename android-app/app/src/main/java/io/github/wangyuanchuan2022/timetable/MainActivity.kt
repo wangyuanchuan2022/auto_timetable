@@ -17,6 +17,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -146,6 +147,17 @@ class MainActivity : AppCompatActivity() {
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (!request.isForMainFrame) return
                 showError("无法连接服务器：${error.description}\n若电脑刚重启过，隧道地址可能已变化，请重新扫码。")
+            }
+
+            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+                // 隧道失效时 Cloudflare 边缘回 530/5xx 错误【网页】，WebView 会把它当正常页面渲染，
+                // 用户被困在 CF 错误页里没有重扫入口——主框架 5xx/403 一律切原生错误屏。
+                // （只看主框架：页内 /api/* 的 401/429 由页面自己的登录闸处理，不受影响）
+                if (!request.isForMainFrame) return
+                val code = errorResponse.statusCode
+                if (code >= 500 || code == 403) {
+                    showError("服务器暂时不可达（HTTP $code）。\n若电脑刚重启过，隧道地址可能已变化，请重新扫码或稍后重试。")
+                }
             }
         }
 
