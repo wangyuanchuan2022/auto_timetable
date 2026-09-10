@@ -102,14 +102,32 @@
       return authInFlight;
     }
 
+    // 静默会话复核：无弹窗地探测会话 Cookie 是否仍有效（true=有效）。
+    // authOk 只是「本次页面加载内登录过」的内存标志——重开网页即重置，不代表会话失效；
+    // WebView 冷启动首个请求也可能竞态漏带 Cookie。401/断线后先静默复核，仍 401 才弹登录框，
+    // 消灭「已登录却再次弹密码」的误弹（会话真的失效时复核仍 401，照常弹窗，无安全让步）。
+    var authProbeInFlight = null;
+    function sessionProbe() {
+      if (!authProbeInFlight) {
+        authProbeInFlight = fetch('/api/schedule', { credentials: 'same-origin', cache: 'no-store' })
+          .then(function (r) { authProbeInFlight = null; return r.status !== 401; })
+          .catch(function () { authProbeInFlight = null; return false; });
+      }
+      return authProbeInFlight;
+    }
+
     function apiFetch(url, opts) {
       opts = opts || {};
       opts.credentials = 'same-origin'; // 携带登录 Cookie
       return fetch(url, opts).then(function (r) {
         if (r.status !== 401) return r;
-        // 未登录：走全局闸门（并发去重），登录成功后重试一次
-        return ensureAuth().then(function (ok) {
-          return ok ? fetch(url, opts) : r;
+        // 401 先静默复核会话：有效（冷启动竞态漏带 Cookie 等）→ 静默重试原请求；
+        // 复核仍 401（会话真失效）→ 走全局登录闸门（并发去重），登录成功后重试一次
+        return sessionProbe().then(function (valid) {
+          if (valid) return fetch(url, opts);
+          return ensureAuth().then(function (ok) {
+            return ok ? fetch(url, opts) : r;
+          });
         });
       });
     }
@@ -1250,11 +1268,13 @@
       }
     }
 
-    // 连接断了（WS 与 SSE 共用）：未登录 → 走全局登录闸门；已登录 → 退避重连
+    // 连接断了（WS 与 SSE 共用）：先静默复核会话（authOk 是页面内存标志，重开网页必为
+    // false 但 Cookie 可能仍有效——直接弹窗就是「已登录却再要密码」的误弹）；确实失效才弹登录框
     function watchDown() {
       if (!authOk) {
-        ensureAuth().then(function (ok) {
-          if (ok) setTimeout(openWatch, 300);
+        sessionProbe().then(function (valid) {
+          if (valid) { authOk = true; setTimeout(openWatch, 300); }
+          else ensureAuth().then(function (ok) { if (ok) setTimeout(openWatch, 300); });
         });
       } else {
         setTimeout(openWatch, Math.min(3000, 500 + Math.floor(Math.random() * 500)));
