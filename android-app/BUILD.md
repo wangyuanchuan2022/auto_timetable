@@ -7,7 +7,7 @@
 **2026-09-10 本机真实构建通过**：`gradlew assembleDebug` → `BUILD SUCCESSFUL`，产物 `app/build/outputs/apk/debug/app-debug.apk`（约 3.9MB，aapt2 badging 核对包名/权限/入口 Activity 均正确）。验证环境：JDK 17（`~/.bubblewrap/jdk/jdk-17.0.11+9`）+ Android SDK（`~/.bubblewrap/android_sdk`，platform 34 + build-tools 35.0.0）+ Gradle 8.7 wrapper。两点环境适配已固化进工程：
 
 - `buildToolsVersion = "35.0.0"`（AGP 8.5 默认 34.0.0 未装，35.0.0 向下兼容）；
-- debug 签名用工程内 `app/debug.keystore`（gitignored，已预生成；不依赖 `~/.android`，免装环境也能出包）。
+- debug 签名用工程内 `app/debug.keystore`（gitignored 不入库——**从零克隆先按下一节命令生成**；不依赖 `~/.android`，免装环境也能出包）。
 
 剩余待真机验证：扫码（CAMERA 运行时权限由 zxing 库内部申请）、通知弹窗与精确闹钟在国产 ROM 的实际表现、登录 Cookie → 原生轮询闭环。静态评审报告：`review/android-app-review.md`（P0=0 / P1=2 已修 / P2 部分采纳）。
 
@@ -22,6 +22,19 @@
 | 扫码 | com.journeyapps:zxing-android-embedded 4.3.0 | Maven Central，无 Google Play Services 依赖 |
 | 后台调度 | androidx.work:work-runtime-ktx 2.9.1 | 每 6 小时 + 开屏/登录/开机即时刷新 |
 
+## 首次构建前：生成 debug 密钥库（从零克隆必做）
+
+debug 签名配置（`app/build.gradle.kts` 的 `signingConfigs.debug`）**显式指向工程内的 `app/debug.keystore`**，而该文件已被 `.gitignore` 排除、不随仓库分发——新环境克隆后直接构建会在签名一步失败（`Task :app:validateSigningDebug` 报 keystore 不存在/无法读取）。首次构建前先在 `android-app/` 目录用 keytool 生成（**以下为本机实际执行过的原样命令**，生成后一次通过出包）：
+
+```bat
+keytool -genkeypair -v -keystore app/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+```
+
+- keytool 来自任意 JDK（17+）的 `bin\`；装了 Android Studio 可直接用其自带 JBR：`"<Android Studio 安装目录>\jbr\bin\keytool.exe"`；
+- **别名 `androiddebugkey` 与两个密码 `android` 必须保持原样**——AGP 的 debug signingConfig 默认值就是它们（工程只覆写了 storeFile）；要改就同步改 `app/build.gradle.kts`；
+- 生成后自检：`keytool -list -keystore app/debug.keystore -storepass android` 应列出一条 `androiddebugkey, PrivateKeyEntry`；
+- 该密钥库仅用于本地调试签名（有效期 10000 天）；正式发布签名见「常见问题」最后一节。
+
 ## 方式一：Android Studio（推荐）
 
 1. `File → Open` 打开 `android-app/` 目录（首次同步会自动下载 Gradle 8.7 与依赖，需网络代理时在 `Settings → HTTP Proxy` 配置）；
@@ -33,7 +46,7 @@
 
 ## 方式二：命令行
 
-前置：JDK 17、Android SDK（`platforms;android-34` + `build-tools;34.0.0` + `platform-tools`），环境变量 `ANDROID_HOME`（或 `local.properties` 写 `sdk.dir=D:\\path\\to\\Android\\Sdk`）。
+前置：JDK 17、Android SDK（`platforms;android-34` + `build-tools;35.0.0` + `platform-tools`），环境变量 `ANDROID_HOME`（或 `local.properties` 写 `sdk.dir=D:\\path\\to\\Android\\Sdk`）。
 
 ```bat
 cd android-app
@@ -42,10 +55,10 @@ gradlew.bat assembleDebug
 
 （首次运行会自动下载 Gradle 8.7 发行包约 130MB 与 Maven 依赖；国内网络建议给 gradle 配代理或用镜像。）
 
-SDK 缺组件时用 sdkmanager 安装：
+SDK 缺组件时用 sdkmanager 安装（build-tools 版本须与 `app/build.gradle.kts` 的 `buildToolsVersion = "35.0.0"` 一致）：
 
 ```bat
-sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+sdkmanager "platforms;android-34" "build-tools;35.0.0" "platform-tools"
 sdkmanager --licenses
 ```
 
