@@ -64,11 +64,17 @@ const occurTable = [
   // skip + weekPattern 组合：单双周允许但 skip 拦截
   { name: 'skip + weekPattern 组合：第 3 周允许但 skip 拦截', ev: { type: 'weekly', weekday: 1, start: '08:00', end: '09:00', weekPattern: { start: '2026-09-14', odd: true }, skip: ['2026-09-28'] }, day: '2026-09-28', want: false },
   { name: 'skip + weekPattern 组合：skip 未命中且周允许 → 发生', ev: { type: 'weekly', weekday: 1, start: '08:00', end: '09:00', weekPattern: { start: '2026-09-14', odd: true }, skip: ['2026-09-21'] }, day: '2026-09-28', want: true },
-  // task 长周期任务（无起止时刻）：仅截止当日「发生」（侧栏/单日视图/截止日标记用，不进时段网格）
+  // task 长周期任务（无起止时刻）：从开始（可选 start，无则一直）持续到截止日逐日「发生」
+  // （手机端当日列表全程展示用；不进时段网格，时刻提醒不涉及）
   { name: 'task 截止当日发生', ev: { type: 'task', title: '报告', deadline: '2026-09-16' }, day: '2026-09-16', want: true },
-  { name: 'task 截止前不发生', ev: { type: 'task', title: '报告', deadline: '2026-09-16' }, day: '2026-09-15', want: false },
+  { name: 'task 截止前持续发生（无 start 即一直可见到截止）', ev: { type: 'task', title: '报告', deadline: '2026-09-16' }, day: '2026-09-15', want: true },
+  { name: 'task 截止前更早同样发生', ev: { type: 'task', title: '报告', deadline: '2026-09-16' }, day: '2026-08-01', want: true },
   { name: 'task 截止后不发生', ev: { type: 'task', title: '报告', deadline: '2026-09-16' }, day: '2026-09-17', want: false },
   { name: 'task 缺 deadline 永不发生', ev: { type: 'task', title: '报告' }, day: '2026-09-16', want: false },
+  { name: 'task start 之前不发生', ev: { type: 'task', title: '报告', start: '2026-09-10', deadline: '2026-09-16' }, day: '2026-09-09', want: false },
+  { name: 'task start 当日开始', ev: { type: 'task', title: '报告', start: '2026-09-10', deadline: '2026-09-16' }, day: '2026-09-10', want: true },
+  { name: 'task start 与截止之间持续发生', ev: { type: 'task', title: '报告', start: '2026-09-10', deadline: '2026-09-16' }, day: '2026-09-15', want: true },
+  { name: 'task start 当日即截止日发生', ev: { type: 'task', title: '报告', start: '2026-09-16', deadline: '2026-09-16' }, day: '2026-09-16', want: true },
 ];
 
 // —— leadMinutes / parseHHMM 用例表 ——
@@ -113,8 +119,11 @@ const validateCases = [
   { name: 'weekPattern 用于非 weekly 报错', ev: { type: 'once', title: 'X', date: '2026-08-28', start: '09:00', end: '10:00', weekPattern: { start: '2026-09-14', odd: true } }, wantErr: 1 },
   { name: 'weekPattern.start 非法报错', ev: { type: 'weekly', title: 'X', weekday: 1, start: '08:00', end: '09:00', weekPattern: { start: 'bad', odd: true } }, wantErr: 1 },
   { name: 'weekPattern 合法通过', ev: { type: 'weekly', title: 'X', weekday: 1, start: '08:00', end: '09:00', weekPattern: { start: '2026-09-14', odd: true } }, wantErr: 0 },
-  // task 长周期任务：无需 start/end，deadline = 必须完成日（必填）
+  // task 长周期任务：无需 start/end，deadline = 必须完成日（必填）；可选 start = 开始日期（≤ deadline）
   { name: '合法 task 通过（无需 start/end）', ev: { type: 'task', title: '报告', deadline: '2026-12-20' }, wantErr: 0 },
+  { name: 'task 带 start 合法通过', ev: { type: 'task', title: '报告', deadline: '2026-12-20', start: '2026-12-01' }, wantErr: 0 },
+  { name: 'task start 格式非法报错', ev: { type: 'task', title: '报告', deadline: '2026-12-20', start: '2026/12/01' }, wantErr: 1 },
+  { name: 'task start 晚于 deadline 报错', ev: { type: 'task', title: '报告', deadline: '2026-12-20', start: '2026-12-25' }, wantErr: 1 },
   { name: 'task 缺 deadline 报错', ev: { type: 'task', title: '报告' }, wantErr: 1 },
   { name: 'task deadline 格式非法报错', ev: { type: 'task', title: '报告', deadline: '2026/12/20' }, wantErr: 1 },
   { name: 'task 带 weekPattern 报错（仅 weekly）', ev: { type: 'task', title: '报告', deadline: '2026-12-20', weekPattern: { start: '2026-09-14', odd: true } }, wantErr: 1 },

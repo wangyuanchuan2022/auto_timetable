@@ -11,7 +11,8 @@
 - once:   date = "YYYY-MM-DD"
 - custom: repeat{interval, unit(day|week|month), start, days[], until}
 - task:   长周期必完成任务（无起止时刻）：deadline = 必须完成日（必填）；
-          occurs_on 仅在截止当日为真（时刻提醒不涉及——load_day 跳过 task）
+          可选 start = 开始日期（YYYY-MM-DD）：从该日起持续到截止日，未设则一直可见到截止；
+          occurs_on 在 [start, deadline] 区间逐日为真（时刻提醒不涉及——load_day 跳过 task）
 - deadline: 到该日（含）为止生效；task 型含义为「任务必须完成日」
 - skip: ["YYYY-MM-DD", ...] 例外日期（停课/调休），该日不发生
 - remindLead: 提醒提前分钟数（>=0；0 = 不提醒；缺失/非法回落默认双档）
@@ -79,7 +80,10 @@ def occurs_on(ev, d):
     if t == "once":
         return ev.get("date") == ds
     if t == "task":
-        return ds == (dl or "")  # 任务：仅在截止当日「发生」（时刻提醒不涉及，load_day 跳过）
+        st = ev.get("start")
+        if st and ds < st:
+            return False  # 开始日期（可选）：未开始不发生
+        return bool(dl)  # 从开始（或无 start 即一直）持续到截止日；缺 deadline = 永不
     if t == "custom":
         r = ev.get("repeat") or {}
         rs = r.get("start")

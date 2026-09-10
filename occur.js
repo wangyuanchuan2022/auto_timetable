@@ -9,8 +9,11 @@
  * - custom: repeat{interval(>=1), unit(day|week|month), start, days[](仅 week), until}
  *           week 未指定 days → 仅起始日的星期几；month 按「几号」匹配（起始日 > 28 时小月自然跳过）
  * - deadline: 到该日（含）为止生效；type=task 时含义为「任务必须完成日」（必填）
- * - task:     长周期必完成任务（无起止时刻，不进时段网格）：deadline = 必须完成日（必填）。
- *             occursOn 仅在截止当日为真（供单日视图/截止日标记使用）；侧栏集中渲染由页面负责
+ * - task:     长周期必完成任务（无起止时刻，不进时段网格）：deadline = 必须完成日（必填）；
+ *             可选 start = 开始日期（YYYY-MM-DD）：从该日起进入进行中并持续到截止日，
+ *             未设 start 时一直可见到截止日。occursOn 在 [start, deadline] 区间逐日为真
+ *             （供单日视图/手机端持续展示）；侧栏集中渲染与截止日横幅由页面负责；
+ *             时刻提醒不涉及 task（调用方按类型跳过）
  * - skip: ["YYYY-MM-DD", ...] 例外日期（停课/调休），该事件在这些日期不发生（先于类型判定）
  * - remindLead: 提醒提前分钟数（>=0；0 = 不提醒；缺失/非法回落默认，由 leadMinutes(ev, def) 提供）
  * - isPurgeable/archiveFor: 过期归档判定与归档纯函数（服务端 purgeExpired 接入走共享模块）
@@ -77,7 +80,10 @@
       return weekPatternOk(ev, day); // 单双周（未配置 = 恒真）
     }
     if (type === 'once') return ev.date === ds;
-    if (type === 'task') return ds === ev.deadline; // 任务：仅在截止当日「发生」（时段网格不渲染，供单日视图/截止标记）
+    if (type === 'task') {
+      if (ev.start && ds < ev.start) return false; // 开始日期（可选）：未开始不发生
+      return !!ev.deadline; // 从开始（或无 start 即一直）持续到截止日；缺 deadline = 永不（无截止依据）
+    }
     if (type === 'custom') {
       var r = ev.repeat || {};
       if (!r.start || ds < r.start) return false;
@@ -125,8 +131,12 @@
     }
     if (!ev.title || !String(ev.title).trim()) errs.push('title 不能为空');
     if (type === 'task') {
-      // 任务（长周期必完成）：无起止时刻，deadline = 必须完成日（必填）
+      // 任务（长周期必完成）：无起止时刻，deadline = 必须完成日（必填）；可选 start = 开始日期
       if (!isDateStr(ev.deadline)) errs.push('task 事件需要有效 deadline（YYYY-MM-DD，必须完成日）');
+      if (ev.start !== undefined && ev.start !== null && ev.start !== '') {
+        if (!isDateStr(ev.start)) errs.push('task 开始日期格式非法（YYYY-MM-DD）');
+        else if (isDateStr(ev.deadline) && ev.start > ev.deadline) errs.push('task 开始日期不能晚于截止日期');
+      }
     } else {
       if (!HHMM_RE.test(String(ev.start || ''))) errs.push('start 必须是 HH:MM（00:00–23:59）');
       if (!HHMM_RE.test(String(ev.end || ''))) errs.push('end 必须是 HH:MM（00:00–23:59）');
