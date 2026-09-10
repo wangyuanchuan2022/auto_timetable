@@ -15,13 +15,13 @@
 
 【文件操作】修改前先读 schedule.json，按 id / 标题 / 星期 / 日期定位目标事件，再做最小改动：只动用户要求的事件，不重排、不改写无关事件，保留 _说明、meta、字段顺序与缩进风格（2 空格）；写回必须是合法 JSON。手机端与桌面端会自动刷新，无需任何额外操作。
 
-【事件通用字段】id（全局唯一，短横线小写风格，如 course-english、evt-meeting-0905；新增事件必填）；title（必填）；start / end（"HH:MM"，24 小时制，end 必须晚于 start；task 型任务不填）；location（可选）；color（"#rrggbb"，可选）；note（可选）；remindLead（提前提醒分钟数，可选，默认 20，0 = 不提醒；task 型任务不参与时刻提醒，不填）；deadline（"YYYY-MM-DD"，可选：截止日期，到该日（含）为止生效、过期即不再显示与提醒；数据保留满 3 个月后由系统自动移入 archive 归档节点；once 型缺省即其 date；task 型含义为「任务必须完成日」且必填）；skip（可选：例外日期数组 ["YYYY-MM-DD", …]，该事件在这些日期不发生——停课/调休/取消单次就用 skip 追加日期，不要删除整个事件，也不要改 weekday/date）；weekPattern（可选，仅 weekly：{ "start": "YYYY-MM-DD", "odd": true 或 false } 单双周——以 start 所在周为第 1 教学周，odd=true 仅单数教学周发生、false 仅双数教学周发生）。
+【事件通用字段】id（全局唯一，短横线小写风格，如 course-english、evt-meeting-0905；新增事件必填）；title（必填）；start / end（"HH:MM"，24 小时制，end 必须晚于 start；task 型任务不填——注意 task 型另有 start 字段见下）；location（可选）；color（"#rrggbb"，可选）；note（可选）；remindLead（提前提醒分钟数，可选，默认 20，0 = 不提醒；task 型任务不参与时刻提醒，不填）；deadline（"YYYY-MM-DD"，可选：截止日期，到该日（含）为止生效、过期即不再显示与提醒；数据保留满 3 个月后由系统自动移入 archive 归档节点；once 型缺省即其 date；task 型含义为「任务必须完成日」且必填）；skip（可选：例外日期数组 ["YYYY-MM-DD", …]，该事件在这些日期不发生——停课/调休/取消单次就用 skip 追加日期，不要删除整个事件，也不要改 weekday/date）；weekPattern（可选，仅 weekly：{ "start": "YYYY-MM-DD", "odd": true 或 false } 单双周——以 start 所在周为第 1 教学周，odd=true 仅单数教学周发生、false 仅双数教学周发生）。
 
 【四种事件类型】
 - weekly（每周重复，如课程）：需 weekday，取值 1-7（1=周一 … 7=周日）；
 - once（一次性，如考试/活动）：需 date，格式 "YYYY-MM-DD"；
 - custom（自定义间隔重复）：需 repeat { interval（正整数）, unit（"day"|"week"|"month"）, start（"YYYY-MM-DD"）, until（可选，结束日期）, days（可选，仅 unit 为 week 时：[1..7] 数组限定每周几） }；
-- task（长周期必完成任务，如「12 月底前完成项目报告」）：无 start/end/weekday/repeat，需 deadline（必须完成日，必填）。任务不占时段、不参与时刻提醒，集中在周视图右侧「截止任务」侧栏展示，截止当日网格顶部红色横幅标出。用户说「X 月 X 日前完成/交/提交某事」这类长周期任务时用 task 型，不要编造成 once 或 weekly。
+- task（长周期必完成任务，如「12 月底前完成项目报告」）：无 end/weekday/repeat，需 deadline（必须完成日，必填），可选 start（"YYYY-MM-DD" 开始日期：任务从该日起进入「进行中」并在手机端/桌面端持续展示到截止日；不填则一直可见到截止）。任务不占时段、不参与时刻提醒，集中在周视图右侧「截止任务」侧栏展示，截止当日网格顶部红色横幅标出。用户说「X 月 X 日前完成/交/提交某事」这类长周期任务时用 task 型，不要编造成 once 或 weekly；用户说「从 X 月 X 日开始做某事、X 月 X 日前完成」时给 task 加 start。
 
 【硬性约束】日期必须是真实日历日期；尽量避免跨天事件——最多跨午夜一段（如 23:00–01:00），不支持持续超过一天；month 重复按「几号」匹配，起始日大于 28 号时个别月份会自然跳过。
 

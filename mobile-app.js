@@ -131,7 +131,12 @@
     function describeRepeat(ev) {
       var t = ev.type || 'once';
       var s;
-      if (t === 'task') return ev.deadline ? '任务 · 截止 ' + ev.deadline : '任务 · 未设截止';
+      if (t === 'task') {
+        var s = '任务';
+        if (ev.start) s += ' · ' + ev.start + ' 起';
+        if (ev.deadline) s += ' · 截止 ' + ev.deadline;
+        return s;
+      }
       if (t === 'weekly') s = '每周重复 · ' + (DAY_FULL[(ev.weekday || 1) - 1] || '');
       else if (t === 'once') s = '一次性 · ' + (ev.date || '');
       else {
@@ -193,9 +198,10 @@
       evs.forEach(function (ev) {
         var it = document.createElement('div');
         it.className = 'it';
-        var isTask = (ev.type || 'once') === 'task'; // 长周期必完成任务：无起止时刻，截止当日出现在列表
+        var isTask = (ev.type || 'once') === 'task'; // 长周期任务：[start, deadline] 区间逐日展示
         var s = toMin(ev.start), e = toMin(ev.end);
-        if (isTask) { if (isToday(day)) it.style.borderColor = '#f85149'; }
+        var isDeadlineDay = isTask && ev.deadline && fmtDate(day) === ev.deadline;
+        if (isTask) { if (isDeadlineDay) it.style.borderColor = '#f85149'; }
         else if (isToday(day) && s <= nowMin && e >= nowMin) it.style.borderColor = '#f85149';
 
         var bar = document.createElement('div');
@@ -205,10 +211,31 @@
         var time = document.createElement('div');
         time.className = 'time';
         if (isTask) {
-          time.textContent = '截止'; // 任务：时刻位显示截止标（醒目红字）
-          time.style.color = '#f85149';
+          // 任务状态位（相对今天）：未开始 / 进行中（倒计时）/ 今天截止 / 已逾期
+          var todayStr = fmtDate(new Date());
+          var n = ev.deadline ? Math.round((parseDate(ev.deadline) - parseDate(todayStr)) / 86400000) : NaN;
+          var notStarted = ev.start && ev.start > todayStr;
+          if (!ev.deadline) {
+            time.textContent = '任务';
+            time.style.color = '#6e7681';
+          } else if (notStarted) {
+            time.textContent = '未开始';
+            time.style.color = '#6e7681';
+          } else if (n === 0) {
+            time.textContent = '今天截止';
+            time.style.color = '#f85149';
+          } else if (n < 0) {
+            time.textContent = '已逾期';
+            time.style.color = '#f85149';
+          } else {
+            time.textContent = '进行中';
+            time.style.color = '#f0883e';
+          }
           var dsub = document.createElement('small');
-          dsub.textContent = ev.deadline || '';
+          var parts = [];
+          if (ev.start) parts.push(ev.start + ' 起');
+          if (ev.deadline) parts.push('截止 ' + ev.deadline + (isNaN(n) ? '' : n === 0 ? '（今天）' : n > 0 ? '·剩 ' + n + ' 天' : ''));
+          dsub.textContent = parts.join(' · ');
           dsub.className = 'muted';
           time.appendChild(dsub);
         } else {
@@ -260,6 +287,7 @@
         '    <div class="field"><label>开始时间</label><input type="time" id="dStart" /></div>' +
         '    <div class="field"><label>结束时间</label><input type="time" id="dEnd" /></div>' +
         '  </div>' +
+        '  <div class="field" id="dTaskStartWrap" style="display:none"><label>开始日期（可选；从该日起持续到截止日，留空 = 一直可见）</label><input type="date" id="dTaskStart" /></div>' +
         '  <div class="field"><label>地点</label><input id="dLoc" placeholder="可选" /></div>' +
         '  <div class="field"><label>备注</label><input id="dNote" placeholder="可选" /></div>' +
         '  <div class="field"><label>提前提醒（分钟，0 = 不提醒，默认 20）</label><input type="number" id="dLead" min="0" max="1440" step="1" /></div>' +
@@ -278,12 +306,14 @@
         '  <div class="dlgMsg" id="dMsg"></div>' +
         '</div>';
       document.body.appendChild(mask);
-      var isTaskDlg = (ev.type || 'once') === 'task'; // 任务：无起止时刻，截止日期必填
+      var isTaskDlg = (ev.type || 'once') === 'task'; // 任务：无起止时刻，截止日期必填，可选开始日期
       if (isTaskDlg) $('dTimeRow').style.display = 'none';
+      $('dTaskStartWrap').style.display = isTaskDlg ? '' : 'none';
       $('dRep').textContent = describeRepeat(ev);
       $('dTitle').value = ev.title || '';
       $('dStart').value = ev.start || '';
       $('dEnd').value = ev.end || '';
+      $('dTaskStart').value = isTaskDlg && ev.start ? ev.start : '';
       $('dLoc').value = ev.location || '';
       $('dNote').value = ev.note || '';
       $('dLead').value = (typeof ev.remindLead === 'number' && isFinite(ev.remindLead)) ? ev.remindLead : 20;
@@ -359,6 +389,7 @@
         if (!title) { msgEl.textContent = '名称不能为空'; msgEl.classList.add('err'); return; }
         if (isTaskDlg) {
           if (!$('dDeadline').value) { msgEl.textContent = '任务需要截止日期（必须完成日，必填）'; msgEl.classList.add('err'); return; }
+          if ($('dTaskStart').value && $('dTaskStart').value > $('dDeadline').value) { msgEl.textContent = '开始日期不能晚于截止日期'; msgEl.classList.add('err'); return; }
         } else {
           if (!start || !end) { msgEl.textContent = '请填写开始与结束时间'; msgEl.classList.add('err'); return; }
           if (toMin(end) === toMin(start)) { msgEl.textContent = '结束时间不能等于开始时间'; msgEl.classList.add('err'); return; }
@@ -394,13 +425,16 @@
           skip: skipList.length ? skipList : undefined,
           weekPattern: newWp || undefined,
         };
+        if (isTaskDlg) cand.start = $('dTaskStart').value || undefined; // 任务：start = 开始日期（YYYY-MM-DD）
         var errs = TTOccur.validateEvent(cand);
         if (errs.length) { msgEl.textContent = '无法保存：' + errs.join('；'); msgEl.classList.add('err'); return; }
 
         // 先改内存对象，写盘成功后关闭
         editEv.title = title;
         if (isTaskDlg) {
-          delete editEv.start; delete editEv.end; delete editEv.remindLead; // 任务无起止时刻、不参与时刻提醒
+          delete editEv.end; delete editEv.remindLead; // 任务无结束时刻、不参与时刻提醒
+          if ($('dTaskStart').value) editEv.start = $('dTaskStart').value; // 开始日期（YYYY-MM-DD，可选）
+          else delete editEv.start; // 留空 = 一直可见到截止
         } else {
           editEv.start = start;
           editEv.end = end;

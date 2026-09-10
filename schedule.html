@@ -280,6 +280,7 @@
           </select>
         </label>
         <label class="ed-field" id="ersWrap">重复起始日期<input type="date" class="dshell-input" id="eRStart" /></label>
+        <label class="ed-field" id="eTaskStartWrap" style="display:none">开始日期（可选，从该日持续到截止）<input type="date" class="dshell-input" id="eTaskStart" /></label>
         <label class="ed-field">截止日期<span id="eDlHint" style="display:none;color:#f0883e;font-weight:700">（任务必填 = 必须完成日）</span><input type="date" class="dshell-input" id="eDeadline" title="到该日（含）为止生效；过期即不再显示，数据保留满 3 个月后自动清除；一次性事件留空即事件当日；任务型 = 必须在此日（含）前完成" /></label>
       </div>
       <div class="ed-field" id="edaysWrap" style="margin-top:8px">重复星期（按间隔循环）
@@ -686,8 +687,9 @@
       var c = t === 'custom';
       edShow('eiWrap', c); edShow('euWrap', c); edShow('ersWrap', c);
       edShow('edaysWrap', c && $('eUnit').value === 'week');
-      // 任务无起止时刻：隐藏开始/结束时间；截止日期升级为必填（红字提示）
+      // 任务无起止时刻：隐藏开始/结束时间；显示任务开始日期（可选）；截止日期升级为必填（红字提示）
       edShow('eStartWrap', !isTask); edShow('eEndWrap', !isTask);
+      edShow('eTaskStartWrap', isTask);
       edShow('eDlHint', isTask);
       var badge = $('edTypeBadge');
       badge.textContent = TYPE_META[t] ? TYPE_META[t].label : t;
@@ -732,6 +734,7 @@
       }
       $('eStart').value = ev.start || '08:00';
       $('eEnd').value = ev.end || '09:00';
+      $('eTaskStart').value = (ev.type === 'task' && ev.start) ? ev.start : ''; // 任务：start = 开始日期
       $('eLoc').value = ev.location || '';
       $('eNote').value = ev.note || '';
       $('eLead').value = (typeof ev.remindLead === 'number' && isFinite(ev.remindLead)) ? ev.remindLead : '';
@@ -760,6 +763,7 @@
       if (isTask) {
         // 任务：无起止时刻，截止日期 = 必须完成日（必填；允许过去日期——逾期任务需保留展示）
         if (!$('eDeadline').value) { edFail('任务需要截止日期（必须完成日，必填）'); return; }
+        if ($('eTaskStart').value && $('eTaskStart').value > $('eDeadline').value) { edFail('任务开始日期不能晚于截止日期'); return; }
       } else {
         if (!start || !end) { edFail('请填写开始与结束时间'); return; }
         if (toMin(end) === toMin(start)) { edFail('结束时间不能等于开始时间（跨天日程请让结束时间小于开始时间，如 23:00–01:00）'); return; }
@@ -801,9 +805,12 @@
       ev.location = String($('eLoc').value || '').trim();
       ev.note = String($('eNote').value || '').trim();
       if (isTask) {
-        // 任务：清掉时段/重复/单双周/例外/提醒等不适用字段，deadline 即必须完成日
-        delete ev.start; delete ev.end; delete ev.weekday; delete ev.date; delete ev.repeat;
+        // 任务：清掉时段/重复/单双周/例外/提醒等不适用字段，deadline 即必须完成日；
+        // 可选 start = 开始日期（YYYY-MM-DD），留空 = 一直可见到截止
+        delete ev.end; delete ev.weekday; delete ev.date; delete ev.repeat;
         delete ev.weekPattern; delete ev.skip; delete ev.remindLead;
+        if ($('eTaskStart').value) ev.start = $('eTaskStart').value;
+        else delete ev.start;
         ev.deadline = $('eDeadline').value;
       } else {
         ev.start = start;
@@ -1064,9 +1071,10 @@
 
     // ---------- 截止任务（type=task）：紧急度分级与侧栏卡片 ----------
     function daysDiff(a, b) { return Math.round((parseDate(a) - parseDate(b)) / 86400000); } // a-b 天数
-    /** 任务紧急度：{ cls, color, text }——逾期/今天红、明天与 ≤3 天橙、≤7 天黄、更远蓝。 */
-    function taskUrgency(dl) {
+    /** 任务紧急度：{ cls, color, text }——未开始灰、逾期/今天红、明天与 ≤3 天橙、≤7 天黄、更远蓝。 */
+    function taskUrgency(dl, start) {
       var today = fmtDate(new Date());
+      if (TTOccur.isDateStr(start) && start > today) return { cls: 'tt-task--later', color: '#6e7681', text: start + ' 开始' }; // 未开始
       if (!TTOccur.isDateStr(dl)) return { cls: 'tt-task--later', color: '#6e7681', text: '未设截止' };
       var n = daysDiff(dl, today); // >0 未来，0 今天，<0 已逾期
       if (n < 0) return { cls: 'tt-task--over', color: '#f85149', text: '已逾期 ' + (-n) + ' 天' };
@@ -1077,7 +1085,7 @@
       return { cls: 'tt-task--later', color: '#4f8ef7', text: '还剩 ' + n + ' 天' };
     }
     function makeTask(tk) {
-      var u = taskUrgency(tk.deadline);
+      var u = taskUrgency(tk.deadline, tk.start);
       var card = div('tt-task ' + u.cls);
       card.style.borderLeftColor = u.color;
       card.style.background = hexToRgba(u.color, 0.13);

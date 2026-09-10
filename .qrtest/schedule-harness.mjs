@@ -19,7 +19,7 @@ const IDS = [
   'detailPanel', 'editPanel', 'jsonArea', 'editMsg', 'saveStatus', 'backupPanel', 'edHead', 'btnDeleteEdit',
   'eName', 'eType', 'eWeekday', 'eDate', 'eDeadline', 'eInterval', 'eUnit', 'eRStart', 'eDays', 'eStart',
   'eEnd', 'eLoc', 'eNote', 'eLead', 'edMsg', 'editorPanel', 'ewWrap', 'edWrap', 'eiWrap', 'euWrap',
-  'ersWrap', 'edaysWrap', 'edTypeBadge', 'eStartWrap', 'eEndWrap', 'eDlHint', 'termBadge', 'badEventsPanel', 'badEventsText', 'historyList',
+  'ersWrap', 'edaysWrap', 'edTypeBadge', 'eStartWrap', 'eEndWrap', 'eDlHint', 'eTaskStart', 'eTaskStartWrap', 'termBadge', 'badEventsPanel', 'badEventsText', 'historyList',
   'historyPanel', 'btnHistory', 'btnCloseHistory', 'btnImport', 'importFile', 'btnImportCancel',
   'importPanel', 'importText', 'btnImportOk', 'btnExportJson', 'btnExportIcs', 'btnPrev', 'btnNext',
   'btnToday', 'btnRefresh', 'btnEdit', 'btnApply', 'btnReset', 'btnCloseDetail', 'btnNew', 'btnUseBackup',
