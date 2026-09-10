@@ -36,6 +36,15 @@
             </intent-filter>
         </activity>
 
+        <!-- 竖屏扫码页（zxing 库 CaptureActivity 默认锁横屏，此处覆写为竖屏；主题用库自带） -->
+        <activity
+            android:name=".VerticalScannerActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:stateNotNeeded="true"
+            android:theme="@style/zxing_CaptureTheme"
+            android:windowSoftInputMode="stateAlwaysHidden" />
+
         <!-- 开机 / APK 升级后立即补排一次提醒计划（WorkManager 周期任务本身也会自续） -->
         <receiver
             android:name=".BootReceiver"

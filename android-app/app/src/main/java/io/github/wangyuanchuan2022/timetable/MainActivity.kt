@@ -237,6 +237,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun launchScanner() {
         val opts = ScanOptions().apply {
+            setCaptureActivity(VerticalScannerActivity::class.java) // 库默认锁横屏，换我们的竖屏扫码页
             setDesiredBarcodeFormats(ScanOptions.QR_CODE)
             setPrompt("对准电脑端「日程安排」面板上的公网访问二维码")
             setBeepEnabled(false)
