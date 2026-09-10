@@ -8,6 +8,15 @@
     var API_WRITE = '/api/schedule';
     var LEGACY_PIN_KEY = 'tt-mobile-pin'; // 旧版把密码存 localStorage，登录成功后清除
 
+    // 安卓 APP（原生 WebView 壳）桥接检测：页面被装入 APP 时由原生注入 window.NativeBridge。
+    // APP 内系统通知由原生精确闹钟提供（WebView 无 Web Push 能力），页面只负责：
+    // ① 登录成功后让 APP 立即同步提醒计划（refreshPlan）；② 通知按钮转交原生权限申请。
+    // 浏览器环境无 NativeBridge → 全部走原有 Web Push 路径，行为零变化。
+    function nativeBridge() {
+      try { return (window.NativeBridge && typeof window.NativeBridge.refreshPlan === 'function') ? window.NativeBridge : null; }
+      catch (e) { return null; }
+    }
+
     // 登录：验证密码后由服务端种 HttpOnly Cookie（密码不落 localStorage、不进 URL）
     function login(pin) {
       return fetch('/api/login', {
@@ -70,7 +79,12 @@
           askPin(wasWrong).then(function (pin) {
             if (pin === null) { authInFlight = null; resolve(false); return; }
             login(pin)
-              .then(function () { authOk = true; authInFlight = null; resolve(true); })
+              .then(function () {
+                authOk = true;
+                var nb = nativeBridge();
+                if (nb) { try { nb.refreshPlan(); } catch (e) {} } // APP 内：登录成功（Cookie 就位）→ 立即同步提醒计划
+                authInFlight = null; resolve(true);
+              })
               .catch(function (err) {
                 var msg = String(err && err.message || '');
                 if (msg.indexOf('稍后再试') > -1 || msg.indexOf('badpin') === -1) {
@@ -555,6 +569,14 @@
       var btn = $('notifyBtn');
       btn.disabled = true;
       try {
+        var nb = nativeBridge();
+        if (nb) {
+          // APP 内：通知由原生精确闹钟提供（WebView 无 Web Push），这里只申请系统通知权限
+          try { nb.requestNotifyPermission(); } catch (e) {}
+          btn.textContent = '🔔 通知由 APP 管理';
+          notifyStateMsg('提醒由 APP 提供（系统闹钟，锁屏/后台均可收到）');
+          return;
+        }
         if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
           notifyStateMsg('此浏览器不支持系统通知（iOS 需 16.4+ 并添加到主屏幕）');
           return;
@@ -593,6 +615,12 @@
     // 已授权过的设备静默恢复：注册 SW、同步订阅、更新按钮状态
     (async function restoreNotifications() {
       try {
+        var nb = nativeBridge();
+        if (nb) { // APP 内：无 Web Push，通知由原生闹钟提供，状态固定
+          $('notifyBtn').textContent = '🔔 通知由 APP 管理';
+          notifyStateMsg('提醒由 APP 提供（系统闹钟，锁屏/后台均可收到）');
+          return;
+        }
         if (typeof Notification === 'undefined' || Notification.permission !== 'granted' || !('serviceWorker' in navigator)) return;
         swReg = await navigator.serviceWorker.register('/sw.js');
         await navigator.serviceWorker.ready;

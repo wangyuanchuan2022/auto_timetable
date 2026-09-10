@@ -6,6 +6,7 @@ import {
   pinIsSet, hashPin, verifyPinSync, issueSession, touchSession, pruneSessions,
   checkPin, guardPin, clientIpOf, corsHeaders, directNoticePage,
   parseCookies, isLoopbackHostname, isLoopbackAddr, isPurgeableEvent,
+  buildPlanItems,
   COOKIE_NAME, SESSION_MAX, SESSION_TTL,
 } from '../server-routes.mjs';
 
@@ -249,6 +250,77 @@ section('H) /api/worktable/write 兼容路由');
   check('H6 POST /api/schedule 回归：共用管线仍 200 且写同一目标',
     r6.status === 200 && writes.length === 1 && writes[0].path === FAKE_SCHEDULE_PATH && writes[0].content === validDoc,
     `status=${r6.status} writes=${writes.length}`);
+}
+
+// ========== I. buildPlanItems + GET /api/plan（APP 课前提醒数据源） ==========
+section('I) /api/plan 课前提醒计划');
+{
+  const now = new Date(2026, 8, 15, 10, 0, 0); // 2026-09-15 10:00 本地时间（固定注入，不依赖真实时钟）
+  const d = (offset) => {
+    const x = new Date(2026, 8, 15 + offset);
+    return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+  };
+  const wd = ((new Date(2026, 8, 15).getDay() + 6) % 7) + 1; // 当日 ISO 星期（周一=1）
+  const events = [
+    { id: 'w1', type: 'weekly', title: '高数', weekday: wd, start: '14:00', end: '15:40', location: 'A101' }, // 今天命中（默认 lead 20）
+    { id: 'o1', type: 'once', title: '英语', start: '08:00', end: '09:40', date: d(1), remindLead: 30 },       // 明天，lead 30
+    { id: 't1', type: 'task', title: '大作业', deadline: d(3) },                                              // task 不参与时刻提醒
+    { id: 'z1', type: 'once', title: '不提醒', start: '09:00', end: '10:00', date: d(2), remindLead: 0 },     // 显式 0 = 不提醒
+    { id: 'x1', type: 'once', title: '跨午夜', start: '23:00', end: '01:00', date: d(1) },                    // end<start 与调度器同语义跳过
+    { id: 'p1', type: 'once', title: '已过期', start: '08:00', end: '09:00', date: d(0) },                    // remindAt 07:40 已过
+    { id: 's1', type: 'once', title: '停课', start: '10:30', end: '11:30', date: d(2), skip: [d(2)] },        // 例外日期
+    { id: 'd1', type: 'once', title: '截止当日', start: '16:00', end: '17:00', date: d(1), deadline: d(1) },  // deadline 到期当日仍发生
+  ];
+  const items = buildPlanItems(events, now, 7);
+  check('I1 weekly 今天命中：remindAt=14:00−20min（默认 lead）', items.some((it) =>
+    it.key === `w1|${d(0)}|14:00` && it.lead === 20 && it.remindAt === new Date(2026, 8, 15, 13, 40).getTime() && it.location === 'A101'));
+  check('I2 task 与 remindLead=0 不出现', !items.some((it) => it.key.startsWith('t1|') || it.key.startsWith('z1|')));
+  check('I3 跨午夜(end<start) 与已过期提醒不返回', !items.some((it) => it.key.startsWith('x1|') || it.key.startsWith('p1|')));
+  check('I4 skip 例外日期不提醒、deadline 到期当日仍提醒',
+    !items.some((it) => it.key.startsWith('s1|')) && items.some((it) => it.key.startsWith('d1|')));
+  check('I5 once lead=30：remindAt=07:30、body 完整', (() => {
+    const it = items.find((x) => x.key === `o1|${d(1)}|08:00`);
+    return !!it && it.remindAt === new Date(2026, 8, 16, 7, 30).getTime()
+      && it.body.includes('英语') && it.body.includes('30 分钟后开始');
+  })());
+  check('I6 升序排列', items.every((it, i) => i === 0 || items[i - 1].remindAt <= it.remindAt));
+  check('I7 days=1 截断：只含今天', buildPlanItems(events, now, 1).every((it) => it.date === d(0)));
+
+  // dispatcher 级端到端：GET /api/plan（guardPin 鉴权 + days clamp）——临时课表文件走真实 readFile
+  const { createRouteDispatcher } = await import('../server-routes.mjs');
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const tmpPath = path.join(os.tmpdir(), 'tt-plan-test-schedule.json');
+  await fs.writeFile(tmpPath, JSON.stringify({ events }), 'utf8');
+  const noop = () => {};
+  const dispatch = createRouteDispatcher({
+    port: 39191, viaTunnel: true,
+    HERE: 'S:/fake-unit', MOBILE_HTML_PATH: 'S:/fake-unit/mobile.html',
+    SCHEDULE_PATH: tmpPath, OCCUR_JS_PATH: 'S:/fake-unit/occur.js',
+    MOBILE_APP_JS_PATH: 'S:/fake-unit/mobile-app.js',
+    loadSettings: async () => ({ pinHash: hashed, sessions: [] }),
+    saveSettings: noop, getTunnelUrl: () => null, getTunnelPort: () => null,
+    selectLanIPv4: () => null, chatBusy: () => false,
+    ensureChatSession: noop, chatWithDsh: noop, chatHistoryMessages: () => [],
+    resetChatSession: noop, dshRpc: noop, DSH_API: 'http://127.0.0.1:3080',
+    buildChatContent: () => ({}), MUX: {},
+    watchSessionStream: noop, sseKeepalive: noop, sseAdmit: () => true,
+    webpush: null, ensureVapid: noop, loadSubs: () => [], saveSubs: noop, safePushEndpoint: noop,
+    atomicWriteFile: noop, TTOccur: (await import('../occur.js')).default,
+  });
+  const get = async (url, headers) => {
+    const res = mkRes();
+    await dispatch(mkReq({ url, headers }), res);
+    return res;
+  };
+  const res401 = await get('/api/plan', {});
+  check('I8 无凭据 401', res401.status === 401, `status=${res401.status}`);
+  const resOk = await get('/api/plan?days=99', { host: '127.0.0.1:39191', 'x-tt-pin': PIN });
+  const j = JSON.parse(resOk.body);
+  check('I9 有凭据 200：days clamp 到 14、items 升序非空', resOk.status === 200 && j.ok === true && j.days === 14
+    && Array.isArray(j.items) && j.items.length > 0, `status=${resOk.status} days=${j && j.days} n=${j && j.items && j.items.length}`);
+  await fs.rm(tmpPath, { force: true });
 }
 
 console.log(`\nserver-routes.mjs\n  通过 ${pass} / 失败 ${fail}`);

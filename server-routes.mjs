@@ -315,6 +315,55 @@ import TTOccur from './occur.js';
  *  单一实现于 occur.js（isPurgeable，与 Python timetable_core 对拍一致），此处仅别名导出防双源漂移。 */
 export const isPurgeableEvent = TTOccur.isPurgeable;
 
+// ==================== 课前提醒计划（APP 侧精确闹钟数据源，纯函数） ====================
+
+/**
+ * buildPlanItems(events, now, days) → 未来 days 天的课前提醒计划（升序）。
+ *
+ * 供 GET /api/plan 使用：安卓 APP（原生 WebView 壳）周期性拉取本端点，把返回的
+ * remindAt（epoch ms）逐条交给系统 AlarmManager 排精确闹钟——设备端不做任何
+ * 「事件是否发生」的领域判定（单一实现仍在 occur.js，语义与 mobile-server.mjs
+ * startReminderScheduler 完全一致）：
+ *   - type=task 不参与时刻提醒；leadMinutes 显式 0 = 不提醒；end<=start 跳过；
+ *   - 只返回 remindAt 晚于 now 的条目（已错过的不再补发）。
+ * 返回条目：{ key, title, date, start, end, lead, remindAt, body }（key 与推送
+ * 去重键同构：`${ev.id || title}|${date}|${start}`）。
+ */
+export function buildPlanItems(events, now, days = 7) {
+  const arr = Array.isArray(events) ? events : [];
+  const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const items = [];
+  for (let i = 0; i < days; i++) {
+    const day = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i);
+    const dateStr = TTOccur.fmtDate(day);
+    for (const ev of arr) {
+      if ((ev.type || 'once') === 'task') continue; // 任务无起止时刻，不参与时刻提醒
+      if (!TTOccur.occursOn(ev, day)) continue;
+      const lead = TTOccur.leadMinutes(ev); // 显式 0 = 不提醒；非法/缺失默认 20
+      if (!(lead > 0)) continue;
+      const s = TTOccur.parseHHMM(ev.start), e = TTOccur.parseHHMM(ev.end);
+      if (e <= s) continue; // 与时刻提醒调度器一致：跨午夜段不提醒
+      const startMs = day.getTime() + s * 60000;
+      const remindAt = startMs - lead * 60000;
+      if (remindAt <= now.getTime()) continue; // 已错过的提醒不再排
+      const title = String(ev.title || '(未命名)');
+      items.push({
+        key: `${ev.id || title}|${dateStr}|${ev.start}`,
+        title,
+        date: dateStr,
+        start: ev.start,
+        end: ev.end,
+        lead,
+        ...(ev.location ? { location: String(ev.location) } : {}),
+        remindAt,
+        body: `${title} ${ev.start}–${ev.end}${ev.location ? ' · ' + ev.location : ''}（约 ${Math.max(1, Math.round(lead))} 分钟后开始）`,
+      });
+    }
+  }
+  items.sort((a, b) => a.remindAt - b.remindAt);
+  return items;
+}
+
 // ==================== 路由分发（服务层经 deps 注入） ====================
 
 /** chat 系路由 body 上限：4×7MB base64 图片承诺 + 余量（原 12MB 会把多张大图整体拒掉）。 */
@@ -671,6 +720,21 @@ export function createRouteDispatcher(deps) {
       if (!guardPin(req, res, settings)) return true;
       const raw = await readFile(SCHEDULE_PATH, 'utf8');
       return sendJSON(res, 200, JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw));
+    }
+    if (req.method === 'GET' && pathname === '/api/plan') {
+      // 安卓 APP 课前提醒数据源：返回未来 N 天（1-14，缺省 7）的提醒时刻表（occur.js 单一实现）。
+      // 鉴权与 /api/schedule 相同（guardPin：会话 Cookie 或 X-TT-Pin 头）；APP 侧复用 WebView 登录 Cookie。
+      if (!guardPin(req, res, settings)) return true;
+      const daysQ = parseInt(new URL(req.url ?? '/', 'http://x').searchParams.get('days'), 10);
+      const days = Math.min(14, Math.max(1, Number.isFinite(daysQ) ? daysQ : 7));
+      const raw = await readFile(SCHEDULE_PATH, 'utf8');
+      const data = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
+      return sendJSON(res, 200, {
+        ok: true,
+        days,
+        generatedAt: Date.now(),
+        items: buildPlanItems(data.events ?? [], new Date(), days),
+      });
     }
     if (req.method === 'POST' && pathname === '/api/schedule') {
       if (!guardPin(req, res, settings)) return true;
