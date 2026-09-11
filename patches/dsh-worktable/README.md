@@ -43,9 +43,12 @@
    `cd "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-worktable\lib"`
    `git -c core.autocrlf=false apply --check D:\tools\auto_timetable\patches\dsh-worktable\dsh-worktable.patch`
 2. 去掉 `--check` 实际应用（同目录同命令）；
-3. `node --check` 语法校验 + `node patches\dsh-worktable\test-auth.mjs`；
-4. 重启 DSH web；
-5. 活体验证（见下）。
+3. **应用后自检（必做）**——实测 autocrlf 造成的静默跳过是 exit 0 且无任何输出的，靠记住参数不够保险，用内容自检兜底（`authGate` 是补丁专属标识符，只出现在补丁新增行，原版没有）：
+   `if (Select-String -Path index.js -Pattern "authGate" -Quiet) { "PATCH OK" } else { "PATCH MISSING - 补丁被静默跳过，重跑第 2 步并确认 -c core.autocrlf=false"; exit 1 }`
+   必须看到 `PATCH OK` 才能继续；
+4. `node --check` 语法校验 + `node patches\dsh-worktable\test-auth.mjs`；
+5. 重启 DSH web；
+6. 活体验证（见下）。
 
 若新版行号/结构变化导致 apply 失败：以新版原件为基线把鉴权块重新移植，再对两份文件重新生成 diff 替换本补丁。
 
