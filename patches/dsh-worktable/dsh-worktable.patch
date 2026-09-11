@@ -1,0 +1,322 @@
+diff --git a/index.js b/index.js
+index 3dd2d2d..f867f52 100644
+--- a/index.js
++++ b/index.js
+@@ -4,6 +4,7 @@ import { readdirSync, realpathSync } from "node:fs";
+ import { readdir, readFile } from "node:fs/promises";
+ import { dirname, resolve as pathResolve, sep } from "node:path";
+ import { createRequire } from "node:module";
++import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+ import { homedir } from "node:os";
+ import { fileURLToPath, pathToFileURL } from "node:url";
+ 
+@@ -216,6 +217,141 @@ async function gitStatus(cwd) {
+     return { isRepo: false, branch: void 0, entries: [] };
+   }
+ }
++// ==================== 访问鉴权（本地安全补丁：对齐 mobile-server PIN 机制） ====================
++// 背景：/api/worktable/* 全家（file/site/fs/workspaces/write/mkdir/git/term）原本完全无鉴权，
++// 本机任意网页可跨源读任意文件、写任意文件、经 term WebSocket 直接拿交互式 shell（RCE）。
++// 本补丁为全部敏感端点加 PIN 门禁：scrypt pinHash + 会话 Cookie（HttpOnly SameSite=Strict）+
++// X-TT-Pin 头兼容 + auth 查询参数（供 WS 脚本）+ 密码失败限速；未配置密码时首次登录即设置。
++// 配置：~/.dsh/storages/worktable-auth.json（环境变量 DSH_WORKTABLE_AUTH_FILE 可覆盖路径）。
++// 升级覆盖后重放：copy 本文件回 node_modules/dsh-worktable/lib/index.js（见 patches/README.md）。
++var COOKIE_NAME = "tt_wt_v2";
++var SESSION_MAX = 20;
++var SESSION_TTL = 30 * 24 * 3600e3;
++function authFilePath() {
++  return process.env.DSH_WORKTABLE_AUTH_FILE || pathResolve(homedir(), ".dsh", "storages", "worktable-auth.json");
++}
++var authState = { loaded: false, data: null };
++async function loadAuth(force) {
++  if (authState.loaded && !force) return authState.data;
++  try {
++    const raw = await readFile(authFilePath(), "utf8");
++    authState.data = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
++  } catch {
++    authState.data = {};
++  }
++  authState.loaded = true;
++  return authState.data;
++}
++async function saveAuth(data) {
++  authState.data = data;
++  authState.loaded = true;
++  const fsx = await import("node:fs/promises");
++  const file = authFilePath();
++  try {
++    await fsx.mkdir(dirname(file), { recursive: true });
++  } catch {}
++  await fsx.writeFile(file, JSON.stringify(data), "utf8");
++}
++function hashPin(pin) {
++  const salt = randomBytes(16).toString("hex");
++  return { salt, hash: scryptSync(String(pin), salt, 32, { N: 16384 }).toString("hex") };
++}
++function verifyPin(given, data) {
++  if (!data?.pinHash?.salt || !data?.pinHash?.hash) return false;
++  try {
++    const calc = scryptSync(String(given), data.pinHash.salt, 32, { N: 16384 });
++    return timingSafeEqual(calc, Buffer.from(data.pinHash.hash, "hex"));
++  } catch {
++    return false;
++  }
++}
++function parseCookies(header) {
++  const out = {};
++  for (const part of String(header ?? "").split(";")) {
++    const eq = part.indexOf("=");
++    if (eq > 0) out[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
++  }
++  return out;
++}
++function pruneSessions(data) {
++  const now = Date.now();
++  data.sessions = (data.sessions ?? []).filter((s) => now - s.lastSeen < SESSION_TTL);
++}
++async function issueSession(data) {
++  const token = randomBytes(24).toString("hex");
++  data.sessions = data.sessions ?? [];
++  pruneSessions(data);
++  data.sessions.push({ token, lastSeen: Date.now() });
++  while (data.sessions.length > SESSION_MAX) data.sessions.shift();
++  await saveAuth(data);
++  return token;
++}
++var RATE = { hits: /* @__PURE__ */ new Map() };
++function rateState(ip) {
++  const now = Date.now();
++  let b = RATE.hits.get(ip);
++  if (!b || now - b.win > 60000) {
++    b = { win: now, count: 0, lockUntil: 0 };
++    RATE.hits.set(ip, b);
++  }
++  return b;
++}
++function rateFail(ip) {
++  const b = rateState(ip);
++  b.count += 1;
++  if (b.count >= 5) b.lockUntil = Date.now() + 600000;
++}
++function rateLocked(ip) {
++  return Math.max(0, rateState(ip).lockUntil - Date.now());
++}
++function clientIp(req) {
++  return req.socket?.remoteAddress || "unknown";
++}
++function hasSession(data, token) {
++  if (!token) return false;
++  const now = Date.now();
++  const hit = (data.sessions ?? []).find((s) => s.token === token);
++  if (!hit) return false;
++  if (now - hit.lastSeen >= SESSION_TTL) return false;
++  hit.lastSeen = now; // 滚动续期（内存态，不逐次写盘）
++  return true;
++}
++async function authGate(req, urlObj) {
++  const data = await loadAuth();
++  if (!data.pinHash) return { status: 501, error: "worktable auth not configured (first login sets the pin)" };
++  const cookies = parseCookies(req.headers?.cookie);
++  if (hasSession(data, cookies[COOKIE_NAME])) return null;
++  const urlToken = urlObj.searchParams.get("auth") || "";
++  if (urlToken && hasSession(data, urlToken)) return null;
++  const ip = clientIp(req);
++  const locked = rateLocked(ip);
++  if (locked > 0) return { status: 429, error: `密码错误次数过多，锁定 ${Math.ceil(locked / 1000)} 秒` };
++  const header = String(req.headers?.["x-tt-pin"] ?? "");
++  if (header) {
++    if (verifyPin(header, data)) return null;
++    rateFail(ip);
++    return { status: 401, error: "pin required" };
++  }
++  return { status: 401, error: "pin required" };
++}
++var LOGIN_PAGE = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>worktable 访问密码</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0e14;color:#e6e8eb;font:14px/1.7 system-ui,sans-serif}main{max-width:380px;padding:28px;background:#12161e;border:1px solid #262b36;border-radius:14px;text-align:center}input{width:100%;padding:10px;border-radius:8px;border:1px solid #262b36;background:rgba(255,255,255,.05);color:inherit;font:inherit;outline:none;box-sizing:border-box}button{margin-top:10px;width:100%;padding:10px;border:none;border-radius:8px;background:#3fb950;color:#07130a;font-weight:600;cursor:pointer}p{font-size:12px;color:#9aa4b2}#m{min-height:18px;font-size:12px;color:#f85149}</style></head><body><main><h2>worktable 访问密码</h2><p>本机工作台接口受安全密码保护（与课表服务 PIN 机制同源）</p><input id="p" type="password" placeholder="安全密码" autofocus><button id="b">进入</button><div id="m"></div></main><script>var i=document.getElementById("p"),b=document.getElementById("b"),m=document.getElementById("m");function go(){fetch("/api/worktable/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pin:i.value})}).then(function(r){return r.json()}).then(function(j){if(j.ok){location.reload()}else{m.textContent=j.error||"密码错误"}}).catch(function(e){m.textContent=String(e)})}b.onclick=go;i.addEventListener("keydown",function(e){if(e.key==="Enter")go()});<\/script></body></html>';
++function deny(req, res, gate) {
++  const wantsHtml = req.method === "GET" && String(req.headers?.accept ?? "").includes("text/html");
++  if (wantsHtml) {
++    res.writeHead(gate.status === 429 ? 429 : 401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
++    res.end(LOGIN_PAGE);
++    return;
++  }
++  json(res, gate.status === 429 ? 429 : 401, { ok: false, error: gate.error });
++}
++async function gateReq(req, res) {
++  const gate = await authGate(req, new URL(req.url ?? "/", "http://dsh.internal"));
++  if (gate) {
++    deny(req, res, gate);
++    return true;
++  }
++  return false;
++}
+ function setupTerminal(webServer, ctx) {
+   if (typeof webServer.registerUpgrade !== "function") return;
+   const wsMod = loadPkg("ws");
+@@ -234,7 +370,19 @@ function setupTerminal(webServer, ctx) {
+   ctx.effect(() => webServer.registerUpgrade({
+     path: "/api/worktable/term",
+     handler: (req, socket, head) => {
+-      wss.handleUpgrade(req, socket, head, (ws) => {
++      const uGate = new URL(req.url ?? "/", "http://dsh.internal");
++      authGate(req, uGate).then((gate) => {
++        if (gate) {
++          // WS 握手拒绝：无升级意义，直接回 401 并断开（evil.com 无凭据拿不到 shell）
++          try {
++            socket.write("HTTP/1.1 401 Unauthorized\r\ncontent-type: text/plain; charset=utf-8\r\nconnection: close\r\n\r\nworktable: " + gate.error + "\n");
++          } catch {}
++          try {
++            socket.destroy();
++          } catch {}
++          return;
++        }
++        wss.handleUpgrade(req, socket, head, (ws) => {
+         const u = new URL(req.url ?? "/", "http://dsh.internal");
+         const cwd = serverCwd(ctx, u.searchParams.get("sessionId") || void 0, u.searchParams.get("cwd") || void 0);
+         const cols = clampDim(Number(u.searchParams.get("cols")), 80);
+@@ -287,6 +435,11 @@ function setupTerminal(webServer, ctx) {
+           } catch {
+           }
+         });
++        });
++      }).catch(() => {
++        try {
++          socket.destroy();
++        } catch {}
+       });
+     }
+   }), "dsh-worktable: terminal upgrade");
+@@ -304,11 +457,56 @@ function apply(ctx) {
+       json(res, 200, { plugin: "dsh-worktable", version: PLUGIN_VERSION, ok: true });
+     }
+   });
++  webServer.register({
++    kind: "exact",
++    path: "/api/worktable/login",
++    handler: async (req, res) => {
++      try {
++        if (req.method !== "POST") {
++          res.writeHead(405);
++          res.end();
++          return;
++        }
++        const body = await readJsonBody(req);
++        const pin = String(body.pin ?? "");
++        if (!pin) {
++          json(res, 400, { ok: false, error: "missing pin" });
++          return;
++        }
++        const data = await loadAuth();
++        if (!data.pinHash) {
++          data.pinHash = hashPin(pin); // 首次登录即设置密码（与 mobile-server 首设流程同语义）
++        } else {
++          const ip = clientIp(req);
++          const locked = rateLocked(ip);
++          if (locked > 0) {
++            json(res, 429, { ok: false, error: `密码错误次数过多，锁定 ${Math.ceil(locked / 1000)} 秒` });
++            return;
++          }
++          if (!verifyPin(pin, data)) {
++            rateFail(ip);
++            json(res, 401, { ok: false, error: "密码错误" });
++            return;
++          }
++        }
++        const token = await issueSession(data);
++        res.writeHead(200, {
++          "content-type": "application/json; charset=utf-8",
++          "cache-control": "no-store",
++          "set-cookie": `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 3600}`
++        });
++        res.end(JSON.stringify({ ok: true, token })); // token 供 WS ?auth= 使用（脚本场景）
++      } catch (err) {
++        json(res, 500, { ok: false, error: String(err) });
++      }
++    }
++  });
+   webServer.register({
+     kind: "exact",
+     path: "/api/worktable/file",
+     handler: async (req, res) => {
+       try {
++        if (await gateReq(req, res)) return;
+         const u = new URL(req.url ?? "/", "http://dsh.internal");
+         const p = u.searchParams.get("path") || "";
+         if (!p) {
+@@ -381,6 +579,7 @@ function apply(ctx) {
+     path: SITE_PREFIX,
+     handler: async (req, res) => {
+       try {
++        if (await gateReq(req, res)) return;
+         if (req.method !== "GET") {
+           res.writeHead(405);
+           res.end();
+@@ -434,6 +633,7 @@ function apply(ctx) {
+     path: "/api/worktable/fs",
+     handler: async (req, res) => {
+       try {
++        if (await gateReq(req, res)) return;
+         const body = await readJsonBody(req);
+         const path = typeof body.path === "string" && body.path ? body.path : serverCwd(ctx, body.sessionId, body.cwd);
+         json(res, 200, await listDirectory(path));
+@@ -445,8 +645,9 @@ function apply(ctx) {
+   webServer.register({
+     kind: "exact",
+     path: "/api/worktable/workspaces",
+-    handler: async (_req, res) => {
++    handler: async (req, res) => {
+       try {
++        if (await gateReq(req, res)) return;
+         const file = pathResolve(homedir(), ".dsh", "storages", "workspace.json");
+         const raw = await readFile(file, "utf8");
+         json(res, 200, JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw));
+@@ -460,6 +661,7 @@ function apply(ctx) {
+     path: "/api/worktable/write",
+     handler: async (req, res) => {
+       try {
++        if (await gateReq(req, res)) return;
+         if (req.method !== "POST") {
+           res.writeHead(405);
+           res.end();
+@@ -489,6 +691,7 @@ function apply(ctx) {
+     path: "/api/worktable/mkdir",
+     handler: async (req, res) => {
+       try {
++        if (await gateReq(req, res)) return;
+         if (req.method !== "POST") {
+           res.writeHead(405);
+           res.end();
+@@ -520,15 +723,34 @@ function apply(ctx) {
+     kind: "exact",
+     path: "/api/worktable/git",
+     handler: async (req, res) => {
++      try {
++        if (await gateReq(req, res)) return;
++      } catch (err) {
++        json(res, 500, { error: String(err) });
++        return;
++      }
+       const body = await readJsonBody(req);
+       const cwd = serverCwd(ctx, body.sessionId, body.cwd);
+       json(res, 200, await gitStatus(cwd));
+     }
+   });
++  loadAuth().then((d) => ctx.logger?.info?.("[dsh-worktable] auth: " + (d.pinHash ? "configured" : "NOT configured — 首次 POST /api/worktable/login 即设置密码")));
+   setupTerminal(webServer, ctx);
+ }
++var __auth = {
++  COOKIE_NAME,
++  authFilePath,
++  authGate,
++  loadAuth,
++  saveAuth,
++  hashPin,
++  verifyPin,
++  rateFail,
++  rateLocked
++};
+ export {
+   HEALTH_PATH,
++  __auth,
+   apply,
+   inject,
+   name

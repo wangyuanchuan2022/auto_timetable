@@ -30,20 +30,24 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `lib/index.js` | 补丁后完整文件（部署目标：`~/.dsh/profiles/web/node_modules/dsh-worktable/lib/index.js`） |
-| `lib/index.js.orig` | 0.2.3 原始文件（回滚/对照用） |
+| `dsh-worktable.patch` | 对 0.2.3 原版 `lib/index.js` 的鉴权补丁 diff（+224/−2；应用演练已验证与补丁后文件逐字节一致） |
 | `setup-pin.mjs` | 设置/重置 PIN：`node patches/dsh-worktable/setup-pin.mjs "<PIN>"`（不带参数则随机生成）；明文同时写入 `.mobile-srv/worktable-pin.txt`（gitignored） |
 | `test-auth.mjs` | 隔离验证（mock 宿主 + 重定向 auth 文件，不碰真实配置）：15 断言，`node patches/dsh-worktable/test-auth.mjs` |
 | `.qrtest/worktable-auth.mjs` | 应急脚本共用鉴权助手（读明文 PIN → login 换 token；补丁未生效时返回 null 自动回退直连） |
 
 ## 升级 dsh-worktable 后重放
 
-`dsh plugin` 升级会覆盖 node_modules。重放步骤：
+`dsh plugin` 升级会覆盖 node_modules。补丁以 diff 形式存于 `dsh-worktable.patch`（基线 = 0.2.3 原版）。重放步骤：
 
-1. `Copy-Item D:\tools\auto_timetable\patches\dsh-worktable\lib\index.js "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-worktable\lib\index.js" -Force`（若新版行号/结构变化，先 diff `lib/index.js.orig` 与新版原件，把鉴权块重新移植）；
-2. `node --check` 语法校验 + `node patches/dsh-worktable/test-auth.mjs`；
-3. 重启 DSH web；
-4. 活体验证（见下）。
+1. 试运行（`--check` 只验不写；**必须带 `-c core.autocrlf=false`**，否则 autocrlf 会造成上下文不匹配而静默跳过）：
+   `cd "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-worktable\lib"`
+   `git -c core.autocrlf=false apply --check D:\tools\auto_timetable\patches\dsh-worktable\dsh-worktable.patch`
+2. 去掉 `--check` 实际应用（同目录同命令）；
+3. `node --check` 语法校验 + `node patches\dsh-worktable\test-auth.mjs`；
+4. 重启 DSH web；
+5. 活体验证（见下）。
+
+若新版行号/结构变化导致 apply 失败：以新版原件为基线把鉴权块重新移植，再对两份文件重新生成 diff 替换本补丁。
 
 ## DSH web 重启后的一次性活体验证
 
