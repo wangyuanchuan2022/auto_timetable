@@ -3,7 +3,7 @@
 // 设定只能内联首条用户消息，镜像回手机前必须剥掉设定前缀）。
 // 覆盖：parseInstruction 章节锚定与四种格式错误、真实 TTPROMPT.md 内容完整性、
 //       注入/剥离 round-trip、旧格式兼容、幂等。
-import { loadInstruction, parseInstruction, withSetup, stripSetup, SETUP_SEP } from '../chat-setup.mjs';
+import { loadInstruction, parseInstruction, withSetup, stripSetup, hasSetup, isHostInjection, SETUP_SEP } from '../chat-setup.mjs';
 
 let pass = 0, fail = 0;
 const check = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name); } };
@@ -65,6 +65,21 @@ check('普通消息原样返回', stripSetup('普通消息') === '普通消息' 
 const multi = withSetup('第一行\n- 列表项\n**加粗**');
 check('多行/markdown 用户消息逐字保留', stripSetup(multi) === '第一行\n- 列表项\n**加粗**');
 check('幂等：剥离后再剥离不变', stripSetup(stripSetup(wrapped)) === stripSetup(wrapped));
+
+console.log('4) 宿主内部注入识别与注入判定（isHostInjection / hasSetup）');
+check('runtime context 快照识别为宿主注入',
+  isHostInjection('Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n……'));
+check('system-reminder 识别为宿主注入', isHostInjection('<system-reminder>\nThe following workspace instructions…'));
+check('上下文压缩检查点识别为宿主注入',
+  isHostInjection('This is an automatically generated checkpoint condensing an earlier span…'));
+check('普通用户消息不是宿主注入', !isHostInjection('吃鸡') && !isHostInjection(wrapped));
+check('宿主快照即使引用分隔标记常量也是宿主注入（防剥离逻辑被带偏）',
+  isHostInjection('Current runtime context.……「〔以上是系统设定；以下是用户消息〕」……'));
+check('hasSetup：首条注入消息为真', hasSetup(wrapped) === true);
+check('hasSetup：旧格式为真', hasSetup(oldFmt) === true);
+check('hasSetup：普通消息为假', hasSetup('吃鸡') === false);
+check('hasSetup：宿主快照正文含完整分隔标记序列时也会命中（所以必须先过 isHostInjection 再判 hasSetup）',
+  hasSetup('Current runtime context.……\n\n' + SETUP_SEP + '……正文片段') === true);
 
 console.log(`\nchat-setup.mjs + TTPROMPT.md\n  通过 ${pass} / 失败 ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

@@ -148,7 +148,7 @@ def main():
             check('nihao' in val3, 'S3 候选词上屏（value=%r）' % val3)
             check(len(streams(page.evaluate('window.__fetches'))) == n_before, 'S3 上屏动作本身不发送')
 
-            print('-- S4 组词结束后再回车：应正常发送 --')
+            print('-- S4 组词结束后回车：换行（参考 DSH 输入框：Enter=换行不发送）--')
             page.keyboard.press('Enter')
             page.wait_for_timeout(300)
             fetched4 = page.evaluate('window.__fetches')
@@ -156,18 +156,26 @@ def main():
             val4 = page.locator('#chatIn').input_value()
             print('  keylog(tail)=%r' % (keylog4[-1:],))
             check(len(keylog4) >= 2 and keylog4[-1]['isComposing'] is False,
-                  'S4 组词已结束：干净回车 isComposing=False（守卫放行）')
-            check(len(streams(fetched4)) == n_before + 1, 'S4 干净回车触发发送（/api/chat/stream）')
-            check(val4 == '', 'S4 发送后输入框清空（value=%r）' % val4)
+                  'S4 组词已结束：干净回车 isComposing=False')
+            check(len(streams(fetched4)) == n_before, 'S4 干净回车不发送（Enter=换行）')
+            check(val4.find('\n') != -1, 'S4 回车插入换行（value=%r）' % val4.replace('\n', '\\n'))
 
-            print('-- S5 Shift+Enter 换行不发送 --')
+            print('-- S5 Ctrl+Enter 发送 --')
+            page.keyboard.press('Control+Enter')
+            page.wait_for_timeout(300)
+            fetched5 = page.evaluate('window.__fetches')
+            val5 = page.locator('#chatIn').input_value()
+            check(len(streams(fetched5)) == n_before + 1, 'S5 Ctrl+Enter 触发发送（/api/chat/stream）')
+            check(val5 == '', 'S5 发送后输入框清空（value=%r）' % val5)
+
+            print('-- S6 Shift+Enter 换行不发送 --')
             page.keyboard.type('abc')
             page.keyboard.press('Shift+Enter')
             page.wait_for_timeout(150)
-            val5 = page.locator('#chatIn').input_value()
-            fetched5 = page.evaluate('window.__fetches')
-            check(len(streams(fetched5)) == n_before + 1, 'S5 Shift+Enter 不发送')
-            check(val5.find('\n') != -1, 'S5 Shift+Enter 插入换行（value=%r）' % val5.replace('\n', '\\n'))
+            val6 = page.locator('#chatIn').input_value()
+            fetched6 = page.evaluate('window.__fetches')
+            check(len(streams(fetched6)) == n_before + 1, 'S6 Shift+Enter 不发送')
+            check(val6.find('\n') != -1, 'S6 Shift+Enter 插入换行（value=%r）' % val6.replace('\n', '\\n'))
 
             browser.close()
         httpd.shutdown()  # 干净停掉静态服务线程，避免解释器退出时 serve_forever 报异常

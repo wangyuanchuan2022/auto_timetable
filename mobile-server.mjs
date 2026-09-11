@@ -28,7 +28,7 @@ import { readFile, writeFile, mkdir, open, rename } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { withSetup, stripSetup } from './chat-setup.mjs';
+import { withSetup, stripSetup, hasSetup, isHostInjection } from './chat-setup.mjs';
 import TTOccur from './occur.js'; // 共享领域判定核心（与网页端 / Python timetable_core.py 同一语义）
 import {
   createRouteDispatcher, checkPin, clientIpOf, pinIsSet, hashPin, isLoopbackHostname,
@@ -373,6 +373,8 @@ async function chatHistoryMessages(sid) {
     if (!Array.isArray(content)) continue;
     const text = content.filter((b) => b?.type === 'text').map((b) => b?.text ?? '').join('').trim();
     if (!text) continue;
+    // 宿主内部注入（runtime 快照 / system-reminder 等）不是用户发言，不进日志
+    if (e.type === 'user/message' && isHostInjection(text)) continue;
     out.push({ role: e.type === 'user/message' ? 'user' : 'assistant', text: e.type === 'user/message' ? stripSetup(text) : text, seq: e.seq ?? 0 });
   }
   return out;
@@ -401,7 +403,11 @@ async function chatHistoryFrames(sid) {
       flushReasoning(d.turn, d.step);
       const content = d.message?.content ?? d.content;
       const text = Array.isArray(content) ? content.filter((b) => b?.type === 'text').map((b) => b?.text ?? '').join('').trim() : '';
-      if (text) frames.push({ t: 'message', role: e.type === 'user/message' ? 'user' : 'assistant', text: e.type === 'user/message' ? stripSetup(text) : text, seq: e.seq ?? 0 });
+      if (!text) continue;
+      // 宿主内部注入（runtime 快照 / system-reminder / 压缩检查点）不是用户发言：整条跳过，
+      // 否则手机会显示一整段系统文本（快照正文还引用了分隔标记常量，会把剥离逻辑带偏）
+      if (e.type === 'user/message' && isHostInjection(text)) continue;
+      frames.push({ t: 'message', role: e.type === 'user/message' ? 'user' : 'assistant', text: e.type === 'user/message' ? stripSetup(text) : text, injected: e.type === 'user/message' && hasSetup(text), seq: e.seq ?? 0 });
     } else if (e.type === 'tool/call') {
       flushReasoning(d.turn, d.step);
       lastToolId = String(d.callId ?? '');
@@ -620,10 +626,13 @@ function muxDispatch(payload, rpcId) {
     if (ev.type === 'user/message' || ev.type === 'assistant/message') {
       const content = ev.data?.message?.content ?? ev.data?.content;
       const text = Array.isArray(content) ? content.filter((b) => b?.type === 'text').map((b) => b?.text ?? '').join('').trim() : '';
+      // 宿主内部注入不是用户发言：整条跳过，不镜像到手机
+      if (ev.type === 'user/message' && isHostInjection(text)) return;
       l.acc = '';
       l.accR = '';
-      // 用户消息剥离内联系统设定前缀（手机不显示设定原文，且回显文本与本地气泡一致以便原位采纳）
-      if (text) l.send({ t: 'message', role: ev.type === 'user/message' ? 'user' : 'assistant', text: ev.type === 'user/message' ? stripSetup(text) : text, seq: ev.seq ?? 0 });
+      // 用户消息剥离内联系统设定前缀（手机不显示设定原文，且回显文本与本地气泡一致以便原位采纳）；
+      // injected 标记驱动手机端显示一条「已注入系统提示词」通知
+      if (text) l.send({ t: 'message', role: ev.type === 'user/message' ? 'user' : 'assistant', text: ev.type === 'user/message' ? stripSetup(text) : text, injected: ev.type === 'user/message' && hasSetup(text), seq: ev.seq ?? 0 });
       return;
     }
     // 完整过程：工具调用（含入参）与工具输出（含错误态）随生成实时镜像到手机端

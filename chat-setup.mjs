@@ -92,3 +92,20 @@ export function stripSetup(text) {
   if (j !== -1) return s.slice(j + OLD_SEP.length);
   return s;
 }
+
+/** 是否首条注入消息（设定 + 分隔标记 + 用户正文）。⚠️ 必须先过 isHostInjection：
+ *  宿主运行时快照正文可能引用分隔标记常量（项目 key 记忆含原文），仅凭含标记会误判。 */
+export function hasSetup(text) {
+  const s = String(text ?? '');
+  return s.indexOf(SETUP_SEP) !== -1 || s.indexOf(OLD_SEP) !== -1;
+}
+
+/** 宿主内部注入识别（DSH 宿主会往会话里写自己的系统级 user 消息）：
+ *  runtime context 快照 / system-reminder / 上下文压缩检查点。这些不是用户发言，
+ *  镜像到手机前必须整条跳过——显示出来就是「一整段系统提示词」事故的根源。 */
+export function isHostInjection(text) {
+  const s = String(text ?? '');
+  return s.startsWith('<system-reminder>')
+    || s.startsWith('Current runtime context.')
+    || s.startsWith('This is an automatically generated checkpoint');
+}

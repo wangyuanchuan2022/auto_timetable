@@ -26,6 +26,17 @@ export function makeEl(tag) {
       return c;
     },
     removeChild(c) { const i = el.children.indexOf(c); if (i >= 0) el.children.splice(i, 1); c.parentNode = null; return c; },
+    // 与真实 DOM 一致：ref 存在且是本节点子节点时插到其前，否则退化为追加
+    insertBefore(c, ref) {
+      if (!ref || ref.parentNode !== el || el.children.indexOf(ref) === -1) return el.appendChild(c);
+      if (c.parentNode && c.parentNode !== el) {
+        const prev = c.parentNode.children.indexOf(c);
+        if (prev >= 0) c.parentNode.children.splice(prev, 1);
+      }
+      c.parentNode = el;
+      el.children.splice(el.children.indexOf(ref), 0, c);
+      return c;
+    },
     // 事件监听注册表：测试用 el._ls['input']()/el._ls.keydown(evt) 直接触发
     addEventListener(type, fn) { (el._ls = el._ls || {})[type] = fn; },
     removeEventListener(type) { if (el._ls) delete el._ls[type]; },

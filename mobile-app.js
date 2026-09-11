@@ -1218,6 +1218,26 @@
       return s;
     }
 
+    // 宿主内部注入识别（与服务端 chat-setup.mjs isHostInjection 同款前缀）：DSH 宿主会往会话里
+    // 写 runtime context 快照 / system-reminder / 压缩检查点，这些不是用户发言，整条不显示——
+    // 且快照正文引用了分隔标记常量，不先跳过会把剥离逻辑带偏（「一整段系统提示词」事故根源）
+    var HOST_INJECTION_PREFIXES = ['<system-reminder>', 'Current runtime context.', 'This is an automatically generated checkpoint'];
+    function isHostInjectionClient(s) {
+      s = String(s == null ? '' : s);
+      for (var i = 0; i < HOST_INJECTION_PREFIXES.length; i++) {
+        if (s.indexOf(HOST_INJECTION_PREFIXES[i]) === 0) return true;
+      }
+      return false;
+    }
+
+    // 「已注入系统提示词」单条通知（替代显示设定原文）
+    function makeSysNote() {
+      var n = document.createElement('div');
+      n.className = 'sysNote';
+      n.textContent = '📌 已注入系统提示词';
+      return n;
+    }
+
     // 对话页不在前台时点亮标签红点（新回复 / 待处理的提问与批准）；回到对话页清除
     function setChatDot(on) {
       var d = $('chatDot');
@@ -1228,8 +1248,13 @@
     function appendServerMessage(msg) {
       if (!msg || renderedSeqs[msg.seq]) return;
       renderedSeqs[msg.seq] = true;
+      // 宿主内部注入（runtime 快照 / system-reminder / 压缩检查点）：不是用户发言，整条不显示
+      if (msg.role === 'user' && isHostInjectionClient(msg.text)) return;
       var text = msg.role === 'user' ? stripSetupClient(msg.text) : msg.text;
       if (msg.role === 'user') {
+        // 首条注入消息：只显示一条「已注入系统提示词」通知，不显示设定原文
+        //（服务端 injected 标记驱动；服务端未重启时由客户端剥离命中兜底）
+        var note = (msg.injected === true || text !== msg.text) ? makeSysNote() : null;
         // 手机本地刚发的同文本气泡 → 原位采纳（避免重复）。
         // 不能用「对话区最后一个元素」判断：发送后末尾会紧跟流式气泡/思考块/工具卡，
         // 待确认的用户气泡不在最后。优先用发送时记录的元素引用（pendingLocalUser.el）定位，
@@ -1245,8 +1270,12 @@
             if (kids[i].classList.contains('bUser') && kids[i].getAttribute('data-local') === '1' && sameText(kids[i])) { take = kids[i]; break; }
           }
         }
-        if (take) { take.removeAttribute('data-local'); pendingLocalUser = null; return; }
+        if (take) {
+          if (note) $('chatLog').insertBefore(note, take); // 通知保持在用户气泡之前
+          take.removeAttribute('data-local'); pendingLocalUser = null; return;
+        }
         settleReasoning(); // 新一轮对话开始
+        if (note) { $('chatLog').appendChild(note); pinBottom(); }
         bubble(text, 'user', true);
       } else {
         dropLive(); // 最终消息覆盖流式气泡
@@ -1710,10 +1739,10 @@
     }
     try { $('chatIn').addEventListener('input', chatInGrow); } catch (e) {}
     $('chatIn').addEventListener('keydown', function (e) {
-      // 中文输入法组词状态：回车是「确认候选词」不是发送。isComposing=true 表示组合中；
-      // keyCode 229 兼容「compositionend 先于 keydown 派发、提交回车不带 isComposing」的实现（Safari 等）
-      if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); sendChat(); }
+      // 参考电脑端 DSH 输入框：Enter 保持默认换行（长文本多行输入，手机软键盘也可用）；
+      // Ctrl/Cmd+Enter 发送。组词状态（isComposing / keyCode 229）一律放行不拦截。
+      if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+      if (e.ctrlKey || e.metaKey) { e.preventDefault(); sendChat(); }
     });
 
     // ---------- 分页：日程 / 对话 两页切换（底部标签栏；状态记入 localStorage，重开恢复） ----------
