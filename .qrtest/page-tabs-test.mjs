@@ -97,6 +97,22 @@ ok(cls(h.byId.pageChat).indexOf('on') !== -1, 'T7 对话页显示');
 const qcard = collect(h.log, el => cls(el).indexOf('qcard') !== -1);
 ok(qcard.length === 1, 'T7 提问卡已渲染');
 
+console.log('-- T9 中文输入法组词回车不误发（isComposing / keyCode 229）--');
+const before9 = streamCount();
+h.byId.chatIn.value = 'nihao';
+h.byId.chatIn._ls.keydown({ key: 'Enter', shiftKey: false, isComposing: true, keyCode: 229, preventDefault() {} });
+await flush(h);
+ok(streamCount() === before9, 'T9 组词中回车（isComposing=true）不发送');
+ok(h.byId.chatIn.value === 'nihao', 'T9 组词中回车保留输入');
+h.byId.chatIn._ls.keydown({ key: 'Enter', shiftKey: false, isComposing: false, keyCode: 229, preventDefault() {} });
+await flush(h);
+ok(streamCount() === before9, 'T9 提交回车（keyCode 229，Safari 形态）不发送');
+h.byId.chatIn.value = '你好';
+h.byId.chatIn._ls.keydown({ key: 'Enter', shiftKey: false, isComposing: false, keyCode: 13, preventDefault() {} });
+await flush(h);
+ok(streamCount() === before9 + 1, 'T9 组词结束后干净回车正常发送');
+ok(h.byId.chatIn.value === '', 'T9 发送后清空');
+
 console.log('-- T8 重开恢复上次页签 --');
 const h2 = loadPage(new URL('../mobile.html', import.meta.url), { store: { 'tt-tab': 'chat' } });
 ok(cls(h2.byId.pageChat).indexOf('on') !== -1, 'T8 上次停在对话页 → 重开直接进对话页');

@@ -62,7 +62,11 @@
         var cancelBtn = mask.querySelector('#pCancel');
         if (cancelBtn) cancelBtn.onclick = function () { close(null); };
         mask.addEventListener('click', function (e) { if (e.target === mask) close(null); });
-        if (input) input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); okBtn.click(); } });
+        if (input) input.addEventListener('keydown', function (e) {
+          // 中文输入法组词回车是「确认候选词」：排除组合状态，避免误触确认
+          if (e.isComposing || e.keyCode === 229) return;
+          if (e.key === 'Enter') { e.preventDefault(); okBtn.click(); }
+        });
         try { input && input.focus(); } catch (e) {}
       });
     }
@@ -1706,6 +1710,9 @@
     }
     try { $('chatIn').addEventListener('input', chatInGrow); } catch (e) {}
     $('chatIn').addEventListener('keydown', function (e) {
+      // 中文输入法组词状态：回车是「确认候选词」不是发送。isComposing=true 表示组合中；
+      // keyCode 229 兼容「compositionend 先于 keydown 派发、提交回车不带 isComposing」的实现（Safari 等）
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); sendChat(); }
     });
 
