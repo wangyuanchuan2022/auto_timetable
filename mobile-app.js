@@ -1098,7 +1098,10 @@
     }
 
     // ---- 思考过程 / 工具调用（与 DSH 生成过程同步展示；完整过程含工具入参与输出） ----
-    var reasonEl = null; // 当前轮的思考过程折叠块（最终消息落地后收起保留）
+    // DeepSeek 风格：生成中标签「💭 深度思考中…」并展开跟随滚动；结束后收起，标签变
+    // 「💭 已深度思考（用时 N 秒）」保留在对话流里。快照回放块（fresh）直接呈收起态。
+    var reasonEl = null;   // 当前轮的思考过程折叠块（结束后收起保留）
+    var reasonStartTs = 0; // 本轮思考开始时刻（结束时计算用时）
     function updateReasoning(text, fresh) {
       if (!text) return;
       if (fresh && reasonEl && reasonEl.parentNode) settleReasoning(); // 快照回放：每个步骤一个折叠块
@@ -1106,15 +1109,28 @@
         reasonEl = document.createElement('details');
         reasonEl.className = 'bReason';
         var sum = document.createElement('summary');
-        sum.textContent = '💭 思考过程';
+        sum.textContent = fresh ? '💭 已深度思考' : '💭 深度思考中…';
         var body = document.createElement('div');
         body.className = 'rBody';
         reasonEl.appendChild(sum);
         reasonEl.appendChild(body);
+        if (!fresh) {
+          try { reasonEl.open = true; } catch (e) {}
+          reasonStartTs = Date.now();
+        } else {
+          try { reasonEl.open = false; } catch (e) {} // 快照回放块直接呈收起态
+        }
         $('chatLog').appendChild(reasonEl);
         pinBottom();
       }
-      reasonEl.querySelector('.rBody').textContent = text;
+      var body2 = reasonEl.querySelector('.rBody');
+      if (body2) {
+        body2.textContent = text;
+        if (reasonEl.open) {
+          try { body2.scrollTop = body2.scrollHeight; } catch (e) {}
+          if (nearBottom($('chatLog'))) pinBottom(); // 生成中跟随滚动（用户上翻回看时不打扰）
+        }
+      }
     }
     // ---- 工具卡片：🔧 名称 + 入参 + 输出（运行中 ⏳ / 成功 ✓ / 失败 ✕） ----
     var toolEls = {}; // callId → 卡片元素
@@ -1172,22 +1188,49 @@
     function settleReasoning() {
       if (reasonEl && reasonEl.parentNode) {
         try { reasonEl.open = false; } catch (e) {}
+        var sum = reasonEl.querySelector('summary');
+        if (sum) {
+          var sec = reasonStartTs ? Math.max(1, Math.round((Date.now() - reasonStartTs) / 1000)) : 0;
+          sum.textContent = sec ? '💭 已深度思考（用时 ' + sec + ' 秒）' : '💭 已深度思考';
+        }
       }
       reasonEl = null; // 下一轮思考创建新的折叠块
+      reasonStartTs = 0;
     }
 
     function nearBottom(el) {
       return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     }
+
+    // 注入设定剥离（客户端兜底）：服务端镜像（chat-setup.mjs stripSetup）已剥首条消息内联的
+    // 系统设定，这里按同款协议分隔标记再剥一次，保证设定全文任何情况下都不显示在对话里。
+    var SETUP_SEPS = ['〔以上是系统设定；以下是用户消息〕', '（以上为系统设定。下面是用户消息：）'];
+    function stripSetupClient(s) {
+      s = String(s == null ? '' : s);
+      for (var i = 0; i < SETUP_SEPS.length; i++) {
+        var k = s.indexOf(SETUP_SEPS[i]);
+        if (k !== -1) return s.slice(k + SETUP_SEPS[i].length).replace(/^\s+/, '');
+      }
+      return s;
+    }
+
+    // 对话页不在前台时点亮标签红点（新回复 / 待处理的提问与批准）；回到对话页清除
+    function setChatDot(on) {
+      var d = $('chatDot');
+      if (d) d.className = 'dot' + (on ? ' on' : '');
+    }
+    function chatDotIfHidden() { if (curTab !== 'chat') setChatDot(true); }
+
     function appendServerMessage(msg) {
       if (!msg || renderedSeqs[msg.seq]) return;
       renderedSeqs[msg.seq] = true;
+      var text = msg.role === 'user' ? stripSetupClient(msg.text) : msg.text;
       if (msg.role === 'user') {
         // 手机本地刚发的同文本气泡 → 原位采纳（避免重复）。
         // 不能用「对话区最后一个元素」判断：发送后末尾会紧跟流式气泡/思考块/工具卡，
         // 待确认的用户气泡不在最后。优先用发送时记录的元素引用（pendingLocalUser.el）定位，
         // 找不到时再向前小范围扫描兜底。比对用 _mdRaw（markdown 渲染前的原始文本）。
-        var sameText = function (el) { return (el._mdRaw !== undefined && el._mdRaw === msg.text) || el.textContent === msg.text; };
+        var sameText = function (el) { return (el._mdRaw !== undefined && el._mdRaw === text) || el.textContent === text; };
         var take = null;
         var p = pendingLocalUser;
         if (p && p.el && p.el.parentNode && p.el.getAttribute('data-local') === '1' && sameText(p.el)) {
@@ -1200,11 +1243,12 @@
         }
         if (take) { take.removeAttribute('data-local'); pendingLocalUser = null; return; }
         settleReasoning(); // 新一轮对话开始
-        bubble(msg.text, 'user', true);
+        bubble(text, 'user', true);
       } else {
         dropLive(); // 最终消息覆盖流式气泡
         settleReasoning(); // 思考过程收起保留在对话流中
-        bubble(msg.text, 'bot', true);
+        bubble(text, 'bot', true);
+        chatDotIfHidden(); // 用户在日程页时红点提示有新回复
         load(); // DSH 可能修改了 schedule.json
       }
     }
@@ -1363,6 +1407,7 @@
 
     function renderQuestionCard(j) {
       if (liveCards[j.rpcId]) return; // 已渲染（重连快照重复推送）
+      chatDotIfHidden(); // 待处理的提问：日程页标签红点提示
       var card = document.createElement('div');
       card.className = 'qcard';
       var badge = document.createElement('div');
@@ -1432,6 +1477,7 @@
 
     function renderApprovalCard(j) {
       if (liveCards[j.rpcId]) return;
+      chatDotIfHidden(); // 待处理的批准：日程页标签红点提示
       var card = document.createElement('div');
       card.className = 'qcard';
       var t = document.createElement('div');
@@ -1578,6 +1624,7 @@
       var text = String(input.value || '').trim();
       if (!text && !attachments.length) return;
       input.value = '';
+      chatInGrow(); // 发送后收回增高
       var imgs = attachments.slice();
       var ub = bubble(text || '（图片）', 'user', true);
       ub.setAttribute('data-local', '1'); // 待 watch 流确认后原位采纳
@@ -1648,7 +1695,38 @@
       });
     }
     $('chatSend').onclick = sendChat;
-    $('chatIn').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
+    // 长文本输入：textarea 自适应增高（最高 35vh 后内部滚动），Enter 发送、Shift+Enter 换行
+    function chatInGrow() {
+      var ta = $('chatIn');
+      if (!ta) return;
+      ta.style.height = 'auto';
+      var maxH = 260;
+      try { if (window.innerHeight) maxH = Math.round(window.innerHeight * 0.35); } catch (e) {}
+      ta.style.height = Math.max(42, Math.min(ta.scrollHeight || 42, maxH)) + 'px';
+    }
+    try { $('chatIn').addEventListener('input', chatInGrow); } catch (e) {}
+    $('chatIn').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); sendChat(); }
+    });
+
+    // ---------- 分页：日程 / 对话 两页切换（底部标签栏；状态记入 localStorage，重开恢复） ----------
+    var curTab = 'sched';
+    function showTab(name) {
+      curTab = name === 'chat' ? 'chat' : 'sched';
+      var sched = $('pageSched'), chat = $('pageChat');
+      if (sched) sched.className = 'page pageSched' + (curTab === 'sched' ? ' on' : '');
+      if (chat) chat.className = 'page pageChat' + (curTab === 'chat' ? ' on' : '');
+      var b1 = $('tabSched'), b2 = $('tabChat');
+      if (b1) b1.className = 'tabBtn' + (curTab === 'sched' ? ' on' : '');
+      if (b2) b2.className = 'tabBtn' + (curTab === 'chat' ? ' on' : '');
+      if (curTab === 'chat') setChatDot(false); // 回到对话页：清未读红点并贴底
+      if (curTab === 'chat') pinBottom();
+      try { localStorage.setItem('tt-tab', curTab); } catch (e) {}
+    }
+    if ($('tabSched')) $('tabSched').onclick = function () { showTab('sched'); };
+    if ($('tabChat')) $('tabChat').onclick = function () { showTab('chat'); };
+    try { showTab(localStorage.getItem('tt-tab') === 'chat' ? 'chat' : 'sched'); }
+    catch (e) { showTab('sched'); }
 
     load();
   })();

@@ -22,9 +22,10 @@
       .it { border-color: #262b36 !important; background: rgba(255,255,255,.02) !important; }
       .muted { color: #9aa4b2 !important; }
       .dlg { background: #12161e !important; }
-      input { background: rgba(255,255,255,.05); border-color: #262b36 !important; color: #e6e8eb; }
+      input, textarea { background: rgba(255,255,255,.05); border-color: #262b36 !important; color: #e6e8eb; }
+      .tabbar { background: #12161e; border-top-color: #262b36; }
     }
-    .wrap { max-width: 560px; margin: 0 auto; padding: 14px 14px calc(24px + env(safe-area-inset-bottom)); }
+    .wrap { max-width: 560px; margin: 0 auto; padding: 14px 14px calc(76px + env(safe-area-inset-bottom)); }
     .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
     .head h1 { margin: 0; font-size: 17px; }
     .head input[type="date"] {
@@ -45,9 +46,9 @@
     .empty { text-align: center; color: #6b7280; padding: 30px 0; }
     .loading { text-align: center; color: #6b7280; padding: 30px 0; }
 
-    /* 对话框 */
+    /* 对话框（弹层，两页共用） */
     .mask {
-      position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 10;
+      position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 30;
       display: flex; align-items: flex-end; justify-content: center;
     }
     .dlg {
@@ -73,12 +74,45 @@
     .dlgMsg { min-height: 18px; font-size: 12px; margin-top: 8px; }
     .ok { color: #2da44e; } .err { color: #cf222e; }
 
-    /* 对话电脑端 DSH */
-    .chat { margin-top: 18px; border-top: 1px solid rgba(128,128,128,.25); padding-top: 12px; }
-    .chat h3 { margin: 0 0 8px; font-size: 14px; }
+    /* ===== 分页布局：页面一 = 日程（常规文档流），页面二 = 对话（占满标签栏以上空间） ===== */
+    .pageSched { display: none; }
+    .pageSched.on { display: block; }
+    .pageChat {
+      position: fixed; top: 0; left: 0; right: 0;
+      bottom: calc(50px + env(safe-area-inset-bottom));
+      max-width: 560px; margin: 0 auto;
+      display: none; flex-direction: column;
+    }
+    .pageChat.on { display: flex; }
+
+    /* 底部标签栏 */
+    .tabbar {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+      display: flex; height: calc(50px + env(safe-area-inset-bottom));
+      background: #fff; border-top: 1px solid #e5e7eb;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .tabbar .tabBtn {
+      flex: 1; border: none; background: none; font: inherit; font-size: 13px;
+      color: #6b7280; cursor: pointer; position: relative; padding: 0;
+    }
+    .tabbar .tabBtn.on { color: #4f6ef7; font-weight: 600; }
+    .tabbar .tabBtn .dot {
+      display: none; position: absolute; top: 9px; left: 50%; margin-left: 22px;
+      width: 8px; height: 8px; border-radius: 50%; background: #cf222e;
+    }
+    .tabbar .tabBtn .dot.on { display: block; }
+
+    /* 对话电脑端 DSH（页面二） */
+    .chat {
+      display: flex; flex-direction: column; flex: 1; min-height: 0;
+      padding: 12px 14px 10px;
+    }
+    .chat .chatTop { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .chat h3 { margin: 0; font-size: 14px; }
     .chatLog {
-      display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px;
-      max-height: 46vh; min-height: 120px; overflow-y: auto; overscroll-behavior: contain;
+      display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px;
+      flex: 1; min-height: 100px; overflow-y: auto; overscroll-behavior: contain;
       border: 1px solid rgba(128,128,128,.2); border-radius: 10px; padding: 8px;
       scrollbar-width: thin;
     }
@@ -121,7 +155,7 @@
     .qsubmit { align-self: flex-end; padding: 8px 18px; border-radius: 10px; border: none; background: #3fb950; color: #07130a; font: inherit; font-weight: 600; cursor: pointer; }
     .qsubmit:disabled { opacity: .5; }
     .qbadge { font-size: 11.5px; color: #6b7280; }
-    /* 思考过程 / 工具调用（同步展示） */
+    /* 思考过程 / 工具调用（同步展示；DeepSeek 风格：生成中展开跟随，结束收起计时保留） */
     .bReason {
       align-self: flex-start; max-width: 88%; font-size: 12px; color: #6b7280;
       background: rgba(128,128,128,.08); border-radius: 10px; padding: 4px 10px;
@@ -144,8 +178,13 @@
       margin: 4px 0 0; background: rgba(128,128,128,.12); border-radius: 6px; padding: 6px; font-size: 11px;
     }
     .bToolCard .terr { color: #cf222e; }
-    .crow { display: flex; gap: 8px; }
-    .crow input { flex: 1; min-width: 0; padding: 9px 10px; border-radius: 10px; border: 1px solid #d1d5db; font: inherit; outline: none; }
+    .crow { display: flex; gap: 8px; align-items: flex-end; }
+    .crow textarea {
+      flex: 1; min-width: 0; padding: 9px 10px; border-radius: 10px; border: 1px solid #d1d5db;
+      font: inherit; line-height: 1.5; outline: none; resize: none;
+      height: 42px; max-height: 35vh; overflow-y: auto;
+    }
+    .crow textarea:focus { border-color: #4f6ef7; }
     .crow button { flex: none; padding: 9px 16px; border-radius: 10px; border: none; background: #3fb950; color: #07130a; font: inherit; font-weight: 600; }
     .crow button:disabled { opacity: .5; }
     .attachBtn { background: transparent !important; border: 1px solid #d1d5db !important; color: inherit !important; padding: 9px 12px !important; }
@@ -160,22 +199,27 @@
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="head">
-      <h1>日程安排</h1>
-      <input type="date" id="datePick" />
+  <!-- 页面一：日程 -->
+  <div class="page pageSched on" id="pageSched">
+    <div class="wrap">
+      <div class="head">
+        <h1>日程安排</h1>
+        <input type="date" id="datePick" />
+      </div>
+      <!-- 系统级通知开关：Service Worker + Web Push（后台也能收到提醒） -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <button id="notifyBtn" style="padding:6px 12px;border-radius:10px;border:1px solid #d1d5db;background:transparent;color:inherit;font:inherit;font-size:12px">🔔 开启系统通知</button>
+        <span id="notifyState" style="font-size:11.5px;color:#6b7280">提醒为页面内弹窗</span>
+      </div>
+      <div class="loading" id="list">加载中…</div>
     </div>
-    <!-- 系统级通知开关：Service Worker + Web Push（后台也能收到提醒） -->
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-      <button id="notifyBtn" style="padding:6px 12px;border-radius:10px;border:1px solid #d1d5db;background:transparent;color:inherit;font:inherit;font-size:12px">🔔 开启系统通知</button>
-      <span id="notifyState" style="font-size:11.5px;color:#6b7280">提醒为页面内弹窗</span>
-    </div>
-    <div class="loading" id="list">加载中…</div>
+  </div>
 
-    <!-- 输入框：连接电脑端 DSH，通过对话让 DSH 编辑日程表 -->
+  <!-- 页面二：对话电脑端 DSH（通过对话让 DSH 编辑日程表） -->
+  <div class="page pageChat" id="pageChat">
     <div class="chat">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-        <h3 style="margin:0 0 8px;font-size:14px">对话电脑端 DSH</h3>
+      <div class="chatTop">
+        <h3>对话电脑端 DSH</h3>
         <div style="display:flex;gap:6px;align-items:center;flex:none;min-width:0">
           <button id="newChatBtn" style="padding:4px 10px;border-radius:999px;border:1px solid #d1d5db;background:transparent;color:inherit;font:inherit;font-size:11.5px;flex:none">✚ 新对话</button>
           <button id="modelBtn" style="padding:4px 10px;border-radius:999px;border:1px solid #d1d5db;background:transparent;color:inherit;font:inherit;font-size:11.5px;flex:none;max-width:38vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">模型：…</button>
@@ -184,14 +228,20 @@
       <div class="chatLog" id="chatLog"></div>
       <div class="thumbs" id="chatThumbs" style="display:none"></div>
       <div class="crow">
-        <input id="chatIn" placeholder="例如：把周五的英语课改到 14:00" enterkeyhint="send" autocomplete="off" />
+        <textarea id="chatIn" rows="1" placeholder="例如：把周五的英语课改到 14:00" enterkeyhint="send" autocomplete="off"></textarea>
         <button id="chatAttach" class="attachBtn" title="添加图片">📷</button>
         <button id="chatSend">发送</button>
       </div>
       <input type="file" id="chatFile" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none" />
-      <div class="chatHint">用自然语言指示电脑端 DSH 修改 schedule.json，可附图片（拍照/相册，自动压缩），回复后日程自动刷新。</div>
+      <div class="chatHint">用自然语言指示电脑端 DSH 修改 schedule.json，可附图片（拍照/相册，自动压缩），回复后日程自动刷新。Enter 发送，Shift+Enter 换行。</div>
     </div>
   </div>
+
+  <!-- 底部标签栏：日程 / 对话 分页切换 -->
+  <nav class="tabbar" id="tabbar">
+    <button class="tabBtn on" id="tabSched" type="button">📅 日程</button>
+    <button class="tabBtn" id="tabChat" type="button">💬 对话<i class="dot" id="chatDot"></i></button>
+  </nav>
 
   <!-- 共享领域判定核心（单一实现，与服务端 / 桌面端 / Python timetable_core.py 同语义） -->
   <script src="/occur.js"></script>

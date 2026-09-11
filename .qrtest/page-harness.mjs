@@ -26,13 +26,38 @@ export function makeEl(tag) {
       return c;
     },
     removeChild(c) { const i = el.children.indexOf(c); if (i >= 0) el.children.splice(i, 1); c.parentNode = null; return c; },
-    addEventListener() {}, removeEventListener() {},
+    // 事件监听注册表：测试用 el._ls['input']()/el._ls.keydown(evt) 直接触发
+    addEventListener(type, fn) { (el._ls = el._ls || {})[type] = fn; },
+    removeEventListener(type) { if (el._ls) delete el._ls[type]; },
     setAttribute(k, v) { el.attrs[k] = String(v); },
     getAttribute(k) { return k in el.attrs ? el.attrs[k] : null; },
     removeAttribute(k) { delete el.attrs[k]; },
-    scrollIntoView() {}, querySelector() { return null; }, querySelectorAll() { return []; },
-    click() {}, focus() {},
+    click() {}, focus() {}, scrollIntoView() {},
+    // 轻量选择器：支持 'summary' 标签 / '.class' / '#id'（页面代码只用这三类简单查询）
+    querySelector(sel) { return matchKids(el, sel)[0] || null; },
+    querySelectorAll(sel) { return matchKids(el, sel, true); },
   };
+  function matchKids(root, sel, all) {
+    const s = String(sel || '');
+    const out = [];
+    const mCls = s.match(/\.([A-Za-z0-9_-]+)/);
+    const mId = s.match(/#([A-Za-z0-9_-]+)/);
+    const mTag = (!mCls && !mId) ? s.match(/^([a-zA-Z][a-zA-Z0-9]*)$/) : null;
+    const walk = (node) => {
+      for (const c of node.children || []) {
+        if (!c || !c.classList) continue; // 文本节点等非元素节点跳过
+        let hit = true;
+        if (mCls && !c.classList.contains(mCls[1])) hit = false;
+        if (mId && !(c.attrs && c.attrs.id === mId[1])) hit = false;
+        if (mTag && c.tagName !== mTag[1].toUpperCase()) hit = false;
+        if (hit) { out.push(c); if (!all) return; }
+        walk(c);
+        if (!all && out.length) return;
+      }
+    };
+    walk(root);
+    return out;
+  }
   Object.defineProperty(el, 'lastElementChild', { get() { return el.children[el.children.length - 1] || null; } });
   Object.defineProperty(el, 'firstChild', { get() { return el.children[0] || null; } });
   el.classList = {
@@ -60,7 +85,7 @@ export function makeTextNode(t) {
   return { nodeType: 3, tagName: null, textContent: String(t), parentNode: null, children: [] };
 }
 
-export function loadPage(pagePath) {
+export function loadPage(pagePath, opts = {}) {
   const html = readFileSync(pagePath, 'utf8');
   // 页面主脚本已抽离为外链 mobile-app.js（mobile.html 内只余 <script src> 引用）：
   // 优先加载外链文件内容；找不到时回退旧版内联 <script> 提取（向后兼容）。
@@ -79,8 +104,12 @@ export function loadPage(pagePath) {
   let occurSrc = '';
   try { occurSrc = readFileSync(new URL('../occur.js', import.meta.url), 'utf8'); } catch (e) {}
 
-  const ids = ['datePick', 'list', 'notifyBtn', 'notifyState', 'chatLog', 'chatThumbs', 'chatIn', 'chatAttach', 'chatSend', 'chatFile', 'modelBtn', 'newChatBtn', 'dDel', 'pIn', 'pOk', 'pCancel', 'pMsg', 'dWeekPattern', 'dWeekPatternWrap', 'dSkip', 'dTaskStart', 'dTaskStartWrap'];
+  const ids = ['pageSched', 'pageChat', 'tabSched', 'tabChat', 'chatDot',
+    'datePick', 'list', 'notifyBtn', 'notifyState', 'chatLog', 'chatThumbs', 'chatIn', 'chatAttach', 'chatSend', 'chatFile', 'modelBtn', 'newChatBtn', 'dDel', 'pIn', 'pOk', 'pCancel', 'pMsg', 'dWeekPattern', 'dWeekPatternWrap', 'dSkip', 'dTaskStart', 'dTaskStartWrap'];
   const byId = {}; ids.forEach(id => { byId[id] = makeEl('div'); });
+
+  // localStorage 桩：可预置初始值（opts.store，测「重开恢复上次页签」），并记录写入供断言
+  const store = Object.assign({}, opts.store || {});
 
   let lastWs = null;
   class WebSocketStub {
@@ -104,7 +133,11 @@ export function loadPage(pagePath) {
     window: { prompt: () => null },
     navigator: {},
     location: { protocol: 'http:', host: '127.0.0.1:3190', search: '', href: 'http://x/' },
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    localStorage: {
+      getItem: (k) => (k in store ? store[k] : null),
+      setItem(k, v) { store[k] = String(v); },
+      removeItem(k) { delete store[k]; },
+    },
     WebSocket: WebSocketStub,
     EventSource: EventSourceStub,
     fetch: (url) => {
@@ -122,6 +155,7 @@ export function loadPage(pagePath) {
   return {
     byId,
     calls,
+    store,
     send: (f) => lastWs && lastWs.onmessage({ data: JSON.stringify(f) }),
     ws: () => lastWs,
     flush: () => new Promise(r => setImmediate(r)),
