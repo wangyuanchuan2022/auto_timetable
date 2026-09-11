@@ -36,7 +36,7 @@ export function isLoopbackAddr(ra) {
 }
 
 /** loopback 判定：/api/admin/* 与直连端口安全收口的网络层硬闸（见 trustedLocalRequest）。 */
-export function isLoopback(req) {
+function isLoopback(req) {
   return isLoopbackAddr(req.socket.remoteAddress);
 }
 
@@ -116,7 +116,7 @@ export function send(res, status, body, headers = {}) {
 export function sendJSON(res, status, obj, extraHeaders = {}) {
   return send(res, status, JSON.stringify(obj), { 'content-type': 'application/json; charset=utf-8', ...extraHeaders });
 }
-export function readBody(req, limit = 5 * 1024 * 1024) {
+function readBody(req, limit = 5 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
@@ -374,7 +374,7 @@ const CHAT_BODY_LIMIT = 32 * 1024 * 1024;
  * deps 契约（均由 mobile-server.mjs 提供）：
  *   port/viaTunnel；HERE/MOBILE_HTML_PATH/SCHEDULE_PATH/OCCUR_JS_PATH/MOBILE_APP_JS_PATH
  *   loadSettings/saveSettings；getTunnelUrl/getTunnelPort；selectLanIPv4；chatBusy()
- *   ensureChatSession/chatWithDsh/chatHistoryMessages/resetChatSession/dshRpc/DSH_API
+ *   ensureChatSession/chatWithDsh/resetChatSession/dshRpc/DSH_API
  *   MUX/watchSessionStream/sseKeepalive/sseAdmit；buildChatContent
  *   webpush/ensureVapid/loadSubs/saveSubs/safePushEndpoint；atomicWriteFile；TTOccur
  *   （selectLanIPv4 传无参包装：内部已注入 networkInterfaces()）
@@ -383,7 +383,7 @@ export function createRouteDispatcher(deps) {
   const {
     port, viaTunnel, HERE, MOBILE_HTML_PATH, SCHEDULE_PATH, OCCUR_JS_PATH, MOBILE_APP_JS_PATH,
     loadSettings, saveSettings, getTunnelUrl, getTunnelPort, selectLanIPv4, chatBusy,
-    ensureChatSession, chatWithDsh, chatHistoryMessages, resetChatSession, dshRpc, DSH_API,
+    ensureChatSession, chatWithDsh, resetChatSession, dshRpc, DSH_API,
     buildChatContent,
     MUX, watchSessionStream, sseKeepalive, sseAdmit,
     webpush, ensureVapid, loadSubs, saveSubs, safePushEndpoint,
@@ -600,11 +600,6 @@ export function createRouteDispatcher(deps) {
       req.on('close', cleanup);
       void closed;
       return true;
-    }
-    if (req.method === 'GET' && pathname === '/api/chat/log') {
-      if (!guardPin(req, res, settings)) return true;
-      const { sid } = await ensureChatSession(settings);
-      return sendJSON(res, 200, { ok: true, sessionId: sid, messages: await chatHistoryMessages(sid) });
     }
     if (req.method === 'GET' && pathname === '/api/chat/models') {
       if (!guardPin(req, res, settings)) return true;

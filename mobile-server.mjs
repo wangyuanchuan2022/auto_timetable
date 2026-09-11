@@ -362,24 +362,6 @@ async function chatWithDsh(message, images = [], onPartial) {
   }
 }
 
-/** 从会话历史提取 user/assistant 消息（原样文本，升序）。 */
-async function chatHistoryMessages(sid) {
-  const h = await dshRpc('session.history', { sessionId: sid, maxMessages: 40 });
-  const evs = (h?.events ?? []).map((e) => e.event).filter(Boolean).sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
-  const out = [];
-  for (const e of evs) {
-    if (e.type !== 'user/message' && e.type !== 'assistant/message') continue;
-    const content = e.data?.message?.content ?? e.data?.content;
-    if (!Array.isArray(content)) continue;
-    const text = content.filter((b) => b?.type === 'text').map((b) => b?.text ?? '').join('').trim();
-    if (!text) continue;
-    // 宿主内部注入（runtime 快照 / system-reminder 等）不是用户发言，不进日志
-    if (e.type === 'user/message' && isHostInjection(text)) continue;
-    out.push({ role: e.type === 'user/message' ? 'user' : 'assistant', text: e.type === 'user/message' ? stripSetup(text) : text, seq: e.seq ?? 0 });
-  }
-  return out;
-}
-
 /**
  * 完整过程快照（与电脑端 GUI 看到的一致）：消息、思考过程、工具调用（入参）与工具输出，
  * 按 seq 升序输出为 watch 帧序列（每帧带 seq，手机端按 seq 幂等去重）。
@@ -932,7 +914,7 @@ async function createServer(port, viaTunnel = false) {
     getTunnelPort: () => TUNNEL_PORT,
     selectLanIPv4: () => selectLanIPv4(networkInterfaces()),
     chatBusy: () => chatBusy,
-    ensureChatSession, chatWithDsh, chatHistoryMessages, resetChatSession, dshRpc, DSH_API,
+    ensureChatSession, chatWithDsh, resetChatSession, dshRpc, DSH_API,
     buildChatContent,
     MUX, watchSessionStream, sseKeepalive, sseAdmit,
     webpush, ensureVapid, loadSubs, saveSubs, safePushEndpoint,
