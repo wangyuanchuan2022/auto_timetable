@@ -34,7 +34,12 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanIntentResult
 import com.journeyapps.barcodescanner.ScanOptions
 
+import org.json.JSONArray
+
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 单 Activity 壳：
@@ -238,6 +243,31 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun showPairingScreen() {
             runOnUiThread { showPairing() }
+        }
+
+        /**
+         * 下一个已排课前提醒的触发时间（MM-dd HH:mm；无则空串）。
+         * 来源 = 最近一次成功同步的提醒计划（Prefs.lastPlanJson，与 AlarmScheduler 已排闹钟同源、
+         * 同为 7 天窗）：PlanPoller 拉取失败/离线时既有闹钟原样保留（见 PlanPoller 注释），
+         * 手机重启/覆盖安装由 BootReceiver 按同份缓存重排——离线期间弹窗不漏。
+         */
+        @JavascriptInterface
+        fun nextReminderAt(): String {
+            return try {
+                val json = Prefs.lastPlanJson(this@MainActivity)
+                val arr = if (json != null) JSONArray(json) else null
+                val now = System.currentTimeMillis()
+                var best = 0L
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val t = arr.optJSONObject(i)?.optLong("remindAt", 0L) ?: 0L
+                        if (t > now && (best == 0L || t < best)) best = t
+                    }
+                }
+                if (best == 0L) "" else SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(best))
+            } catch (e: Exception) {
+                ""
+            }
         }
     }
 

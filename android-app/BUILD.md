@@ -4,6 +4,8 @@
 
 ## 编译验证记录
 
+**2026-09-14 v1.3 / v1.4 本机真实构建通过**：v1.3（versionCode 4）离线兜底上线（主框架失败路由 assets 离线页，按壳落盘的上次课表渲染）；v1.4（versionCode 5）离线横幅升级——标题改「离线数据 · 上次同步 MM-dd HH:mm（N 天前同步）」，超 1 天显示陈旧警示（期间的电脑端改动不反映），并新增提醒计划状态行「提醒计划仍生效 · 下次提醒 MM-dd HH:mm」（桥 `nextReminderAt()` 从最近一次同步的提醒计划取未来最早一条，与 AlarmManager 已排闹钟同源；PlanPoller 失败路径不碰闹钟、BootReceiver 开机/覆盖安装按同一份缓存重排——离线不漏弹）。两次均 `gradlew assembleDebug` → `BUILD SUCCESSFUL`，aapt2 badging 核对版本号，assets（offline.html + occur.js 构建期同步）确认入包。回归：`.qrtest/page-tabs-test.mjs`（64 断言）+ `.qrtest/offline-page-test.mjs`（27 断言）全绿。
+
 **2026-09-10 本机真实构建通过**：`gradlew assembleDebug` → `BUILD SUCCESSFUL`，产物 `app/build/outputs/apk/debug/app-debug.apk`（约 3.9MB，aapt2 badging 核对包名/权限/入口 Activity 均正确）。验证环境：JDK 17（`~/.bubblewrap/jdk/jdk-17.0.11+9`）+ Android SDK（`~/.bubblewrap/android_sdk`，platform 34 + build-tools 35.0.0）+ Gradle 8.7 wrapper。两点环境适配已固化进工程：
 
 - `buildToolsVersion = "35.0.0"`（AGP 8.5 默认 34.0.0 未装，35.0.0 向下兼容）；

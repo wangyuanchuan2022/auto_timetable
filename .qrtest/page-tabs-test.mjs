@@ -170,8 +170,10 @@ function makeBridge() {
     refreshPlan() {},
     saveCache(json) { b.saved.push(json); },
     readCache() { return b.cache || ''; },
+    nextReminderAt() { return b.next || ''; },
     saved: [],
     cache: '',
+    next: '09-13 05:01',
   };
   return b;
 }
@@ -190,7 +192,10 @@ const h5 = loadPage(new URL('../mobile.html', import.meta.url), { nativeBridge: 
 await flush(h5);
 const banner = h5.body.querySelector('.tt-offline');
 ok(banner !== null, 'T12 断连时出现离线横幅');
-ok(String(banner && banner.textContent).indexOf('重新连接') !== -1, 'T12 横幅文案与重连按钮同条渲染');
+const bannerText = h5.body.querySelector('.tt-offline-text');
+ok(bannerText && String(bannerText.textContent).indexOf('离线数据 · 上次同步') !== -1, 'T12 横幅按用户格式标明离线数据与上次同步时间');
+ok(/上次同步 \d{2}-\d{2} \d{2}:\d{2}/.test(String(bannerText && bannerText.textContent)), 'T12 同步时间为 MM-DD HH:mm 格式');
+ok(String(bannerText && bannerText.textContent).indexOf('提醒仍生效') !== -1 && String(bannerText && bannerText.textContent).indexOf('09-13 05:01') !== -1, 'T12 横幅带提醒计划状态与下次提醒时间');
 const offTitles = collect(h5.byId.list, el => cls(el).indexOf('title') !== -1).map(el => el.textContent);
 ok(offTitles.indexOf('离线也能看到的课') !== -1, 'T12 断连时按缓存课表渲染日程');
 const retryBtn = h5.body.querySelector('.tt-offline-retry');

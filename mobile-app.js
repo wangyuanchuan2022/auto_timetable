@@ -201,16 +201,29 @@
     }
 
     // 页面层离线横幅：页面可达但 API 失败时，用原生缓存渲染并明示降级态；重连成功即移除。
-    // 动态创建（不进 mobile.html 静态 DOM，样式内联），测试以 .tt-offline 定位。
+    // 文案按用户要求含「上次同步时间」与提醒状态（时间来源=壳缓存的 savedAt / 已排提醒计划）。
+    // 动态创建（不进 mobile.html 静态 DOM，样式内联），测试以 .tt-offline / .tt-offline-text 定位。
     function showOfflineBanner(savedAt) {
       if (document.querySelector('.tt-offline')) return;
       var d = new Date(savedAt || Date.now());
+      var days = Math.floor((Date.now() - (savedAt || Date.now())) / 86400000);
+      var age = days <= 0 ? '' : (days === 1 ? '（1 天前同步）' : '（' + days + ' 天前同步）');
+      var nb = nativeBridge();
+      var remind = '';
+      if (nb && typeof nb.nextReminderAt === 'function') {
+        try {
+          var nx = nb.nextReminderAt() || '';
+          remind = nx ? ' · 提醒仍生效，下次 ' + nx : ' · 提醒仍生效（暂无未来 7 天已排提醒）';
+        } catch (e) {}
+      }
       var bar = document.createElement('div');
       bar.className = 'tt-offline';
       bar.style.cssText = 'position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:8px;' +
         'padding:8px 10px;background:#5a3b10;color:#ffd9a0;font-size:12px;line-height:1.4;';
-      bar.textContent = '离线模式 · 显示上次同步的课表（' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
-        pad(d.getHours()) + ':' + pad(d.getMinutes()) + '）';
+      var txt = document.createElement('span');
+      txt.className = 'tt-offline-text';
+      txt.textContent = '离线数据 · 上次同步 ' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
+        pad(d.getHours()) + ':' + pad(d.getMinutes()) + age + remind;
       var btn = document.createElement('button');
       btn.className = 'tt-offline-retry';
       btn.textContent = '重新连接';
@@ -219,6 +232,7 @@
         if (bar.parentNode) bar.parentNode.removeChild(bar);
         load();
       };
+      bar.appendChild(txt);
       bar.appendChild(btn);
       document.body.insertBefore(bar, document.body.firstChild);
     }

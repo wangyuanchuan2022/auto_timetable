@@ -19,6 +19,8 @@
   }
   #bTitle { font-size: 14px; font-weight: 600; color: #ffd9a0; }
   #bMeta  { font-size: 12px; color: #b8a988; margin-top: 2px; }
+  #bStale { font-size: 12px; color: #ffb86b; margin-top: 6px; }
+  #bRemind { font-size: 12px; color: #7ee787; margin-top: 6px; }
   .btns { display: flex; gap: 8px; margin-top: 9px; }
   .btns button {
     flex: 1; padding: 9px 0; font-size: 13px; border: 0; border-radius: 8px;
@@ -52,6 +54,8 @@
 <div id="banner">
   <div id="bTitle">离线模式 · 无法连接电脑端</div>
   <div id="bMeta">正在读取上次同步的课表…</div>
+  <div id="bStale" style="display:none"></div>
+  <div id="bRemind" style="display:none"></div>
   <div class="btns">
     <button id="bRetry">重新连接</button>
     <button id="bScan" class="alt">重新扫码</button>
@@ -188,6 +192,23 @@
     return pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
+  function ageText(ts) {
+    if (!ts) return '';
+    var days = Math.floor((Date.now() - ts) / 86400000);
+    if (days <= 0) return '';
+    return days === 1 ? '（1 天前同步）' : '（' + days + ' 天前同步）';
+  }
+
+  // 提醒状态（与已排闹钟同源：最近一次同步的计划；拉取失败时旧闹钟原样保留，离线不漏弹）
+  function remindText(b) {
+    if (!b || typeof b.nextReminderAt !== 'function') return ''; // 无桥（纯浏览器）：不显示
+    try {
+      var nx = b.nextReminderAt() || '';
+      return nx ? '提醒计划仍生效 · 下次提醒 ' + nx + '（离线不漏弹）'
+                : '提醒计划仍生效 · 暂无未来 7 天内的已排提醒';
+    } catch (e) { return ''; }
+  }
+
   function wireButtons(b) {
     $('bRetry').onclick = function () {
       if (b && typeof b.retryConnect === 'function') { try { b.retryConnect(); } catch (e) {} }
@@ -214,7 +235,6 @@
     var b = bridge();
     wireButtons(b);
     disableIfNoBridge(b);
-    $('bTitle').textContent = '离线模式 · 无法连接电脑端'; // 显式化：不依赖静态 HTML 内容
     try {
       var raw = b ? b.readCache() : '';
       var c = raw ? JSON.parse(raw) : null;
@@ -222,13 +242,31 @@
     } catch (e) { cache = null; }
 
     if (!cache) {
-      $('bMeta').textContent = '没有可用的离线缓存（本机还未成功同步过课表）';
+      $('bTitle').textContent = '离线模式 · 尚未同步过课表'; // 显式化：不依赖静态 HTML 内容
+      $('bMeta').textContent = '没有可用的离线缓存（本机还未成功加载过课表）';
+      var stale0 = $('bStale'), rem0 = $('bRemind');
+      if (stale0) stale0.style.display = 'none'; // 从未同步过：无陈旧警示也无提醒状态可言
+      if (rem0) rem0.style.display = 'none';
       var list = $('list');
       list.className = 'empty';
       list.textContent = '暂无离线数据。连接成功一次后，这里会自动保存课表供离线查看。';
       return;
     }
-    $('bMeta').textContent = '显示上次同步的课表（' + savedText() + '）。地址可能已变化：可重新扫码或手动输入。';
+    $('bTitle').textContent = '离线数据 · 上次同步 ' + savedText() + ageText(cache.savedAt);
+    $('bMeta').textContent = '课表以缓存为准：地址可能已变化，可重新扫码或手动输入。';
+    var stale = $('bStale'), rem = $('bRemind');
+    if (stale) {
+      var days = cache.savedAt ? Math.floor((Date.now() - cache.savedAt) / 86400000) : 0;
+      if (days >= 1) {
+        stale.textContent = '缓存已超过 1 天：期间在电脑端删除或新增的课不会反映在这里。';
+        stale.style.display = 'block';
+      } else stale.style.display = 'none';
+    }
+    if (rem) {
+      var rt = remindText(b);
+      if (rt) { rem.textContent = rt; rem.style.display = 'block'; }
+      else rem.style.display = 'none';
+    }
     render();
   }
 

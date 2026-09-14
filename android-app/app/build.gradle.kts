@@ -13,8 +13,8 @@ android {
         applicationId = "io.github.wangyuanchuan2022.timetable"
         minSdk = 24
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.3"   // v1.3: 离线兜底页（断连时按上次同步课表离线运行 + 重连/扫码）
+        versionCode = 5
+        versionName = "1.4"   // v1.4: 离线横幅带上次同步时间/陈旧度 + 提醒计划状态（下次提醒时间）
     }
 
     signingConfigs {
