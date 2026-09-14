@@ -717,11 +717,13 @@ export function createRouteDispatcher(deps) {
       return sendJSON(res, 200, JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw));
     }
     if (req.method === 'GET' && pathname === '/api/plan') {
-      // 安卓 APP 课前提醒数据源：返回未来 N 天（1-14，缺省 7）的提醒时刻表（occur.js 单一实现）。
+      // 安卓 APP 课前提醒数据源：返回未来 N 天（1-60，缺省 7）的提醒时刻表（occur.js 单一实现）。
+      // 上限 60：APP（PlanPoller）请求 30 天——离线安全期 = 窗口长度，电脑失联 30 天内提醒不整段消失；
+      // 老客户端不带 days 仍按 7 天（行为不变）。
       // 鉴权与 /api/schedule 相同（guardPin：会话 Cookie 或 X-TT-Pin 头）；APP 侧复用 WebView 登录 Cookie。
       if (!guardPin(req, res, settings)) return true;
       const daysQ = parseInt(new URL(req.url ?? '/', 'http://x').searchParams.get('days'), 10);
-      const days = Math.min(14, Math.max(1, Number.isFinite(daysQ) ? daysQ : 7));
+      const days = Math.min(60, Math.max(1, Number.isFinite(daysQ) ? daysQ : 7));
       const raw = await readFile(SCHEDULE_PATH, 'utf8');
       const data = JSON.parse(raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw);
       return sendJSON(res, 200, {

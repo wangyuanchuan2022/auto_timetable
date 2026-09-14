@@ -13,8 +13,8 @@ android {
         applicationId = "io.github.wangyuanchuan2022.timetable"
         minSdk = 24
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.4"   // v1.4: 离线横幅带上次同步时间/陈旧度 + 提醒计划状态（下次提醒时间）
+        versionCode = 6
+        versionName = "1.5"   // v1.5: 提醒计划窗 7→30 天（服务端 clamp 上限 14→60），离线安全期一个月
     }
 
     signingConfigs {

@@ -213,7 +213,7 @@
       if (nb && typeof nb.nextReminderAt === 'function') {
         try {
           var nx = nb.nextReminderAt() || '';
-          remind = nx ? ' · 提醒仍生效，下次 ' + nx : ' · 提醒仍生效（暂无未来 7 天已排提醒）';
+          remind = nx ? ' · 提醒仍生效，下次 ' + nx : ' · 提醒仍生效（暂无未来 30 天已排提醒）';
         } catch (e) {}
       }
       var bar = document.createElement('div');

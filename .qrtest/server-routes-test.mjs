@@ -318,7 +318,7 @@ section('I) /api/plan 课前提醒计划');
   check('I8 无凭据 401', res401.status === 401, `status=${res401.status}`);
   const resOk = await get('/api/plan?days=99', { host: '127.0.0.1:39191', 'x-tt-pin': PIN });
   const j = JSON.parse(resOk.body);
-  check('I9 有凭据 200：days clamp 到 14、items 升序非空', resOk.status === 200 && j.ok === true && j.days === 14
+  check('I9 有凭据 200：days clamp 到 60、items 升序非空', resOk.status === 200 && j.ok === true && j.days === 60
     && Array.isArray(j.items) && j.items.length > 0, `status=${resOk.status} days=${j && j.days} n=${j && j.items && j.items.length}`);
   await fs.rm(tmpPath, { force: true });
 }

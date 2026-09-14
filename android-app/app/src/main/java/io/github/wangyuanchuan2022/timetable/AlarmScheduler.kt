@@ -18,7 +18,9 @@ object AlarmScheduler {
     private const val FILE = "tt_prefs"
     private const val KEY_CODES = "alarm_codes"
     private const val REQ_BASE = 4200
-    private const val MAX_ALARMS = 80
+    // 30 天计划窗的量级（v1.5 窗口 7→30 天）：每交易日约 4-8 节课提醒，30 天 ≈ 120-240 条。
+    // 取 250 保证 30 天窗不截断；截断语义安全——items 升序，取前 250 条保住的是最近的提醒。
+    private const val MAX_ALARMS = 250
 
     fun canScheduleExact(ctx: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true

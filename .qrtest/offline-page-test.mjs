@@ -140,7 +140,7 @@ ok(h7.byId.bStale.style.display === 'block' && h7.byId.bStale.textContent.indexO
 
 console.log('-- O8 无已排提醒：提醒行明示「暂无」而非沉默 --');
 const h8 = boot(makeBridge(goodCache, ''));
-ok(h8.byId.bRemind.style.display === 'block' && h8.byId.bRemind.textContent.indexOf('暂无未来 7 天内的已排提醒') !== -1, 'O8 无已排提醒时明确说明');
+ok(h8.byId.bRemind.style.display === 'block' && h8.byId.bRemind.textContent.indexOf('暂无未来 30 天内的已排提醒') !== -1, 'O8 无已排提醒时明确说明（30 天窗口径）');
 
 console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

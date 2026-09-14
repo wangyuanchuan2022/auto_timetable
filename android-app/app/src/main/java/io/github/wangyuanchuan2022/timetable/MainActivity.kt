@@ -248,7 +248,7 @@ class MainActivity : AppCompatActivity() {
         /**
          * 下一个已排课前提醒的触发时间（MM-dd HH:mm；无则空串）。
          * 来源 = 最近一次成功同步的提醒计划（Prefs.lastPlanJson，与 AlarmScheduler 已排闹钟同源、
-         * 同为 7 天窗）：PlanPoller 拉取失败/离线时既有闹钟原样保留（见 PlanPoller 注释），
+         * 同为 30 天窗 v1.5 起）：PlanPoller 拉取失败/离线时既有闹钟原样保留（见 PlanPoller 注释），
          * 手机重启/覆盖安装由 BootReceiver 按同份缓存重排——离线期间弹窗不漏。
          */
         @JavascriptInterface

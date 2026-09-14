@@ -32,7 +32,9 @@ class PlanPoller(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             CookieManager.getInstance().getCookie(base)
         }
         val conn = try {
-            (URL("$base/api/plan?days=7").openConnection() as HttpURLConnection).apply {
+            // days=30（服务端 clamp 1..60）：离线安全期 = 计划窗口长度——电脑失联 30 天内，
+            // 已排到本机的课前提醒仍整段有效（v1.5 起从 7 天扩到 30 天，用户要求防提醒静默断档）。
+            (URL("$base/api/plan?days=30").openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 8000
                 readTimeout = 15000
