@@ -164,5 +164,49 @@ const schedTitles = collect(h3.byId.list, el => cls(el).indexOf('title') !== -1)
 ok(JSON.stringify(schedTitles) === JSON.stringify(['早八', '午间讨论', '晚间加课', '作业先截止', '作业后截止']),
   'T11 顺序 = 时刻日程按开始时间升序 → 任务按截止升序沉底');
 
+console.log('-- T12 离线兜底：成功后缓存上报 / 断连时用缓存渲染 + 横幅 / 重连成功清横幅 --');
+function makeBridge() {
+  const b = {
+    refreshPlan() {},
+    saveCache(json) { b.saved.push(json); },
+    readCache() { return b.cache || ''; },
+    saved: [],
+    cache: '',
+  };
+  return b;
+}
+const schedEvents = { events: [{ id: 'e1', type: 'once', date: TODAY, title: '离线也能看到的课', start: '10:00', end: '11:00' }] };
+const b4 = makeBridge();
+const h4 = loadPage(new URL('../mobile.html', import.meta.url), { nativeBridge: b4, responses: { '/api/schedule': schedEvents } });
+await flush(h4);
+ok(b4.saved.length === 1, 'T12 加载成功后向原生壳上报课表缓存');
+ok(String(b4.saved[0]).indexOf('离线也能看到的课') !== -1, 'T12 缓存 payload 含事件数据');
+ok(h4.body.querySelector('.tt-offline') === null, 'T12 在线时无离线横幅');
+
+const b5 = makeBridge();
+b5.cache = b4.saved[0]; // 模拟壳已落盘上次课表：本次断连读取
+const failUrls = ['/api/schedule'];
+const h5 = loadPage(new URL('../mobile.html', import.meta.url), { nativeBridge: b5, failUrls });
+await flush(h5);
+const banner = h5.body.querySelector('.tt-offline');
+ok(banner !== null, 'T12 断连时出现离线横幅');
+ok(String(banner && banner.textContent).indexOf('重新连接') !== -1, 'T12 横幅文案与重连按钮同条渲染');
+const offTitles = collect(h5.byId.list, el => cls(el).indexOf('title') !== -1).map(el => el.textContent);
+ok(offTitles.indexOf('离线也能看到的课') !== -1, 'T12 断连时按缓存课表渲染日程');
+const retryBtn = h5.body.querySelector('.tt-offline-retry');
+ok(retryBtn !== null, 'T12 横幅带重新连接按钮');
+failUrls.length = 0; // 模拟网络恢复（harness 持同一数组引用）
+retryBtn.onclick();
+await flush(h5);
+ok(h5.body.querySelector('.tt-offline') === null, 'T12 重连成功后横幅移除');
+ok(b5.saved.length === 1, 'T12 重连成功后再次上报最新缓存');
+
+const b6 = makeBridge();
+b6.cache = '{not-json';
+const h6 = loadPage(new URL('../mobile.html', import.meta.url), { nativeBridge: b6, failUrls: ['/api/schedule'] });
+await flush(h6);
+ok(h6.body.querySelector('.tt-offline') === null, 'T12 缓存损坏时不进离线态');
+ok(String(h6.byId.list.textContent).indexOf('加载失败') !== -1, 'T12 缓存损坏时保留原错误文案');
+
 console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0); // 显式退出：页面脚本的 15s 僵尸自检 interval 会挂住事件循环

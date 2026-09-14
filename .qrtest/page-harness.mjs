@@ -131,6 +131,7 @@ export function loadPage(pagePath, opts = {}) {
 
   const calls = []; // 记录页面发起的 fetch（url 顺序），供测试断言
   const respond = opts.responses || {}; // 测试按 URL 预置自定义 JSON 响应（如乱序课表）
+  const bodyEl = makeEl('body');
   const sandbox = {
     console, Date, Promise, JSON, Math, Number, String, Array, Object, RegExp, parseInt, parseFloat, isNaN, isFinite, Set, Map,
     URL, URLSearchParams,
@@ -140,9 +141,10 @@ export function loadPage(pagePath, opts = {}) {
       createElement: t => makeEl(t),
       createTextNode: t => makeTextNode(t),
       addEventListener() {},
-      body: makeEl('body'),
+      querySelector(sel) { return bodyEl.querySelector(sel); },
+      body: bodyEl,
     },
-    window: { prompt: () => null },
+    window: Object.assign({ prompt: () => null }, opts.nativeBridge ? { NativeBridge: opts.nativeBridge } : {}),
     navigator: {},
     location: { protocol: 'http:', host: '127.0.0.1:3190', search: '', href: 'http://x/' },
     localStorage: {
@@ -154,6 +156,9 @@ export function loadPage(pagePath, opts = {}) {
     EventSource: EventSourceStub,
     fetch: (url) => {
       calls.push(String(url));
+      if (opts.failUrls && opts.failUrls.indexOf(String(url)) !== -1) {
+        return Promise.reject(new Error('network down (test stub)'));
+      }
       if (respond[url]) return Promise.resolve({ ok: true, status: 200, json: async () => respond[url] });
       if (url === '/api/chat/models') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, current: { provider: 'p', model: 'm' } }) });
       if (url === '/api/schedule') return Promise.resolve({ ok: true, status: 200, json: async () => ({ events: [] }) });
@@ -169,6 +174,7 @@ export function loadPage(pagePath, opts = {}) {
     byId,
     calls,
     store,
+    body: bodyEl,
     send: (f) => lastWs && lastWs.onmessage({ data: JSON.stringify(f) }),
     ws: () => lastWs,
     flush: () => new Promise(r => setImmediate(r)),

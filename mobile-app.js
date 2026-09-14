@@ -182,14 +182,65 @@
       return TTOccur.fmtDate(TTOccur.mondayOf(new Date()));
     }
 
+    // 离线兜底（APP 内）：成功拿到最新课表后交给原生壳落盘；连不上时优先用缓存渲染。
+    // 纯浏览器无 NativeBridge → 原有行为零变化。
+    function saveOfflineCache(json) {
+      var nb = nativeBridge();
+      if (!nb || typeof nb.saveCache !== 'function') return;
+      try { nb.saveCache(JSON.stringify({ savedAt: Date.now(), data: json })); } catch (e) {}
+    }
+
+    function readOfflineCache() {
+      var nb = nativeBridge();
+      if (!nb || typeof nb.readCache !== 'function') return null;
+      try {
+        var c = JSON.parse(nb.readCache());
+        if (c && c.data && Array.isArray(c.data.events)) return c;
+      } catch (e) {}
+      return null;
+    }
+
+    // 页面层离线横幅：页面可达但 API 失败时，用原生缓存渲染并明示降级态；重连成功即移除。
+    // 动态创建（不进 mobile.html 静态 DOM，样式内联），测试以 .tt-offline 定位。
+    function showOfflineBanner(savedAt) {
+      if (document.querySelector('.tt-offline')) return;
+      var d = new Date(savedAt || Date.now());
+      var bar = document.createElement('div');
+      bar.className = 'tt-offline';
+      bar.style.cssText = 'position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:8px;' +
+        'padding:8px 10px;background:#5a3b10;color:#ffd9a0;font-size:12px;line-height:1.4;';
+      bar.textContent = '离线模式 · 显示上次同步的课表（' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
+        pad(d.getHours()) + ':' + pad(d.getMinutes()) + '）';
+      var btn = document.createElement('button');
+      btn.className = 'tt-offline-retry';
+      btn.textContent = '重新连接';
+      btn.style.cssText = 'flex:none;padding:4px 10px;border:0;border-radius:6px;background:#ffd9a0;color:#5a3b10;font-size:12px;';
+      btn.onclick = function () {
+        if (bar.parentNode) bar.parentNode.removeChild(bar);
+        load();
+      };
+      bar.appendChild(btn);
+      document.body.insertBefore(bar, document.body.firstChild);
+    }
+
     function load() {
       apiFetch(API_READ, { cache: 'no-store' }).then(function (r) {
         if (!r.ok) throw new Error('http ' + r.status);
         return r.json();
       }).then(function (json) {
         data = json;
+        saveOfflineCache(json);
+        var stale = document.querySelector('.tt-offline'); // 重连成功：清掉离线横幅
+        if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
         render();
       }).catch(function () {
+        var cache = readOfflineCache();
+        if (cache) {
+          data = cache.data; // 连不上电脑端：按上次同步的课表离线运行
+          render();
+          showOfflineBanner(cache.savedAt);
+          return;
+        }
         data = null;
         $('list').className = 'empty';
         $('list').textContent = '加载失败：无法连接电脑端服务（或密码未通过）';

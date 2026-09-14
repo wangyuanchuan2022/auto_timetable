@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>课程表 · 离线</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0b0e14; color: #e6e8eb;
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    padding-bottom: 24px;
+  }
+  #banner {
+    position: sticky; top: 0; z-index: 10;
+    background: #2b2413; border-bottom: 1px solid #5a4a1e;
+    padding: 10px 14px;
+  }
+  #bTitle { font-size: 14px; font-weight: 600; color: #ffd9a0; }
+  #bMeta  { font-size: 12px; color: #b8a988; margin-top: 2px; }
+  .btns { display: flex; gap: 8px; margin-top: 9px; }
+  .btns button {
+    flex: 1; padding: 9px 0; font-size: 13px; border: 0; border-radius: 8px;
+    background: #ffd9a0; color: #5a3b10; font-weight: 600;
+  }
+  .btns button.alt { background: #1c2230; color: #e6e8eb; }
+  .btns button:disabled { opacity: 0.45; }
+  #dayBar {
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    padding: 14px 0 6px;
+  }
+  #dayBar button {
+    width: 40px; height: 32px; border: 0; border-radius: 8px;
+    background: #161b24; color: #e6e8eb; font-size: 16px;
+  }
+  #dLabel { font-size: 15px; font-weight: 600; }
+  #list { padding: 4px 14px; }
+  .it {
+    background: #12161f; border: 1px solid #232a38; border-left: 3px solid #4f6ef7;
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 10px;
+  }
+  .it.now { border-left-color: #f85149; }
+  .bar { display: flex; align-items: baseline; gap: 10px; }
+  .tm { font-size: 12px; color: #9aa4b2; font-variant-numeric: tabular-nums; flex: none; }
+  .ti { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub { font-size: 12px; color: #9aa4b2; margin-top: 3px; }
+  .empty { color: #9aa4b2; text-align: center; padding: 40px 20px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="banner">
+  <div id="bTitle">离线模式 · 无法连接电脑端</div>
+  <div id="bMeta">正在读取上次同步的课表…</div>
+  <div class="btns">
+    <button id="bRetry">重新连接</button>
+    <button id="bScan" class="alt">重新扫码</button>
+    <button id="bInput" class="alt">手动输入地址</button>
+  </div>
+</div>
+<div id="dayBar">
+  <button id="dPrev" aria-label="前一天">‹</button>
+  <span id="dLabel"></span>
+  <button id="dNext" aria-label="后一天">›</button>
+</div>
+<div id="list" class="list"></div>
+
+<script src="occur.js"></script>
+<script>
+(function () {
+  'use strict';
+  // 离线兜底页（APP assets）：连不上服务器时按上次同步的课表继续展示。
+  // 领域判定（occursOn）走共享模块 occur.js（与服务端/桌面/手机页同源同语义）；
+  // 本页内的排序/高亮仅为展示层复刻，不承担任何判定职责。
+
+  function bridge() {
+    try { return (window.NativeBridge && typeof window.NativeBridge.readCache === 'function') ? window.NativeBridge : null; }
+    catch (e) { return null; }
+  }
+
+  var $ = function (id) { return document.getElementById(id); };
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function fmtDate(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function parseDate(s) { var p = String(s).split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
+  function toMin(hhmm) { var p = String(hhmm || '0:0').split(':'); return (+p[0]) * 60 + (+p[1] || 0); }
+  var DAY_FULL = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  var occursOn = window.TTOccur && typeof window.TTOccur.occursOn === 'function' ? window.TTOccur.occursOn : null;
+
+  var cache = null;   // {savedAt, data:{events, meta}}
+  var off = 0;        // 日期偏移：0=今天，-1=昨天，+1=明天
+
+  function baseDay() {
+    var d = new Date();
+    d.setDate(d.getDate() + off);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  // 展示排序（复刻 mobile-app.js dayEvents 视觉口径）：日程在前、任务沉底；起止升序、缺时刻沉底；任务按截止升序
+  function dayEvents(day) {
+    if (!cache || !cache.data || !Array.isArray(cache.data.events) || !occursOn) return [];
+    return cache.data.events.filter(function (ev) { return occursOn(ev, day); })
+      .sort(function (a, b) {
+        var ta = (a.type || 'once') === 'task' ? 1 : 0, tb = (b.type || 'once') === 'task' ? 1 : 0;
+        if (ta !== tb) return ta - tb;
+        var sa = toMin(a.start), sb = toMin(b.start);
+        var na = isNaN(sa), nb = isNaN(sb);
+        if (na !== nb) return na ? 1 : -1;
+        if (sa !== sb) return sa - sb;
+        return String(a.deadline || '').localeCompare(String(b.deadline || '')) ||
+               String(a.id || a.title || '').localeCompare(String(b.id || b.title || ''));
+      });
+  }
+
+  // 副行文案（简版描述，非判定）
+  function describe(ev) {
+    var t = ev.type || 'once';
+    if (t === 'task') {
+      var s = '任务';
+      if (ev.start) s += ' · ' + ev.start + ' 起';
+      if (ev.deadline) s += ' · 截止 ' + ev.deadline;
+      return s;
+    }
+    if (t === 'weekly') {
+      var w = '每周' + (DAY_FULL[((ev.weekday || 1) % 7)]) +
+        (ev.weekPattern && ev.weekPattern.start ? ' · ' + (ev.weekPattern.odd === false ? '双周' : '单周') : '');
+      return w;
+    }
+    if (t === 'once') return '一次性 · ' + (ev.date || '');
+    var r = ev.repeat || {};
+    var unitMap = { day: '天', week: '周', month: '月' };
+    var s2 = '每 ' + (parseInt(r.interval, 10) || 1) + ' ' + (unitMap[r.unit || 'day'] || '天') + '重复';
+    if (r.until) s2 += ' · 至 ' + r.until;
+    return s2;
+  }
+
+  function render() {
+    var day = baseDay();
+    var label;
+    if (off === 0) label = '今天';
+    else if (off === -1) label = '昨天';
+    else if (off === 1) label = '明天';
+    else label = fmtDate(day) + ' ' + DAY_FULL[day.getDay()];
+    $('dLabel').textContent = label + (off !== 0 ? '（' + fmtDate(day) + '）' : '');
+
+    var list = $('list');
+    list.className = 'list';
+    list.textContent = '';
+    var evs = dayEvents(day);
+    if (!evs.length) {
+      list.className = 'empty';
+      list.textContent = (off === 0 ? '今天' : label) + '暂无日程（离线数据截至 ' + savedText() + '）';
+      return;
+    }
+    var isToday = off === 0;
+    var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+    evs.forEach(function (ev) {
+      var isTask = (ev.type || 'once') === 'task';
+      var it = document.createElement('div');
+      it.className = 'it' + (isTask ? ' task' : '');
+      var s = toMin(ev.start), e = toMin(ev.end);
+      if (isTask && ev.deadline && fmtDate(day) === ev.deadline) it.style.borderColor = '#f85149';
+      else if (isToday && !isNaN(s) && !isNaN(e) && s <= nowMin && e >= nowMin) it.className = 'it now';
+
+      var bar = document.createElement('div');
+      bar.className = 'bar';
+      var tm = document.createElement('span');
+      tm.className = 'tm';
+      tm.textContent = isTask ? '任务' : (isNaN(s) ? '—' : pad(Math.floor(s / 60)) + ':' + pad(s % 60) + '–' + pad(Math.floor(e / 60)) + ':' + pad(e % 60));
+      var ti = document.createElement('span');
+      ti.className = 'ti';
+      ti.textContent = ev.title || '(未命名)';
+      bar.appendChild(tm);
+      bar.appendChild(ti);
+      it.appendChild(bar);
+
+      var sub = document.createElement('div');
+      sub.className = 'sub';
+      sub.textContent = describe(ev);
+      it.appendChild(sub);
+      list.appendChild(it);
+    });
+  }
+
+  function savedText() {
+    if (!cache || !cache.savedAt) return '未知时间';
+    var d = new Date(cache.savedAt);
+    return pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function wireButtons(b) {
+    $('bRetry').onclick = function () {
+      if (b && typeof b.retryConnect === 'function') { try { b.retryConnect(); } catch (e) {} }
+      else location.reload(); // 纯浏览器兜底：直接重载
+    };
+    $('bScan').onclick = function () {
+      if (b && typeof b.startScan === 'function') { try { b.startScan(); } catch (e) {} }
+    };
+    $('bInput').onclick = function () {
+      if (b && typeof b.showPairingScreen === 'function') { try { b.showPairingScreen(); } catch (e) {} }
+    };
+    $('dPrev').onclick = function () { if (off > -7) { off--; render(); } };
+    $('dNext').onclick = function () { if (off < 7) { off++; render(); } };
+  }
+
+  function disableIfNoBridge(b) {
+    if (b) return;
+    $('bScan').disabled = true;
+    $('bInput').disabled = true;
+    $('bRetry').textContent = '重试';
+  }
+
+  function init() {
+    var b = bridge();
+    wireButtons(b);
+    disableIfNoBridge(b);
+    $('bTitle').textContent = '离线模式 · 无法连接电脑端'; // 显式化：不依赖静态 HTML 内容
+    try {
+      var raw = b ? b.readCache() : '';
+      var c = raw ? JSON.parse(raw) : null;
+      if (c && c.data && Array.isArray(c.data.events)) cache = c;
+    } catch (e) { cache = null; }
+
+    if (!cache) {
+      $('bMeta').textContent = '没有可用的离线缓存（本机还未成功同步过课表）';
+      var list = $('list');
+      list.className = 'empty';
+      list.textContent = '暂无离线数据。连接成功一次后，这里会自动保存课表供离线查看。';
+      return;
+    }
+    $('bMeta').textContent = '显示上次同步的课表（' + savedText() + '）。地址可能已变化：可重新扫码或手动输入。';
+    render();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

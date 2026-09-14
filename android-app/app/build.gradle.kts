@@ -13,8 +13,8 @@ android {
         applicationId = "io.github.wangyuanchuan2022.timetable"
         minSdk = 24
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"   // v1.3: 离线兜底页（断连时按上次同步课表离线运行 + 重连/扫码）
     }
 
     signingConfigs {
@@ -40,7 +40,16 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    // 离线页 assets：加生成目录（构建时由下方 syncOccurJs 填充 occur.js）
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated-assets"))
 }
+
+// 领域判定单一实现约定：离线页用的 occur.js 永远从仓库根构建期同步（单一来源），禁止手改 assets 副本
+val syncOccurJs = tasks.register<Copy>("syncOccurJs") {
+    from(rootProject.file("../occur.js"))
+    into(layout.buildDirectory.dir("generated-assets"))
+}
+tasks.named("preBuild") { dependsOn(syncOccurJs) }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")

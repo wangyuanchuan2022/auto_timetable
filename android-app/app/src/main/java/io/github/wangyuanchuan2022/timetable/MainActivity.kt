@@ -34,6 +34,8 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanIntentResult
 import com.journeyapps.barcodescanner.ScanOptions
 
+import java.io.File
+
 /**
  * 单 Activity 壳：
  *   配对屏（扫码 / 手动输入服务器地址） → WebView 加载电脑端移动页（全部既有功能）。
@@ -47,6 +49,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var errorText: TextView
     private lateinit var urlInput: EditText
     private var fileCallback: ValueCallback<Array<Uri>>? = null
+
+    // 离线兜底（v1.3）：连不上服务器时，用 assets 离线页 + 上次同步的课表缓存继续看，别困在错误屏
+    private val cacheFile by lazy { File(filesDir, "offline-cache.json") }
+    private val offlineUrl = "file:///android_asset/offline.html"
 
     // ---- ActivityResult 注册（须在 onCreate 前完成，属性初始化即满足） ----
 
@@ -146,7 +152,7 @@ class MainActivity : AppCompatActivity() {
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (!request.isForMainFrame) return
-                showError("无法连接服务器：${error.description}\n若电脑刚重启过，隧道地址可能已变化，请重新扫码。")
+                routeFailure("无法连接服务器：${error.description}\n若电脑刚重启过，隧道地址可能已变化，请重新扫码。")
             }
 
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
@@ -156,7 +162,7 @@ class MainActivity : AppCompatActivity() {
                 if (!request.isForMainFrame) return
                 val code = errorResponse.statusCode
                 if (code >= 500 || code == 403) {
-                    showError("服务器暂时不可达（HTTP $code）。\n若电脑刚重启过，隧道地址可能已变化，请重新扫码或稍后重试。")
+                    routeFailure("服务器暂时不可达（HTTP $code）。\n若电脑刚重启过，隧道地址可能已变化，请重新扫码或稍后重试。")
                 }
             }
         }
@@ -197,6 +203,42 @@ class MainActivity : AppCompatActivity() {
         fun refreshPlan() {
             PlanPoller.enqueueOnce(this@MainActivity) // 登录成功后立即同步提醒计划
         }
+
+        // ---- 离线兜底（v1.3）：页面把最新课表交给壳落盘；连接失败时壳路由到 assets 离线页读缓存 ----
+
+        @JavascriptInterface
+        fun saveCache(json: String) {
+            try {
+                cacheFile.writeText(json)
+            } catch (e: Exception) {
+                /* 尽力缓存，失败不影响在线功能 */
+            }
+        }
+
+        @JavascriptInterface
+        fun readCache(): String = try {
+            if (cacheFile.isFile) cacheFile.readText() else ""
+        } catch (e: Exception) {
+            ""
+        }
+
+        @JavascriptInterface
+        fun retryConnect() {
+            runOnUiThread {
+                val b = Prefs.baseUrl(this@MainActivity)
+                if (b == null) showPairing() else loadServer(b)
+            }
+        }
+
+        @JavascriptInterface
+        fun startScan() {
+            runOnUiThread { launchScanner() }
+        }
+
+        @JavascriptInterface
+        fun showPairingScreen() {
+            runOnUiThread { showPairing() }
+        }
     }
 
     // ---- 界面状态切换 ----
@@ -213,6 +255,20 @@ class MainActivity : AppCompatActivity() {
         errorView.visibility = View.GONE
         pairingView.visibility = View.VISIBLE
         if (urlInput.text.isNullOrBlank()) Prefs.baseUrl(this)?.let { urlInput.setText(it) }
+    }
+
+    /**
+     * 主框架加载失败（v1.3）：优先离线兜底页（assets + 上次同步的课表缓存），
+     * 无缓存才进错误屏。已在离线页时不再路由（离线页自足、不会再触发服务器加载，防循环）。
+     */
+    private fun routeFailure(msg: String) {
+        if (webView.visibility != View.VISIBLE) return // 只在网页加载失败时接管
+        if (webView.url?.startsWith(offlineUrl) == true) return
+        if (cacheFile.isFile) {
+            webView.loadUrl(offlineUrl)
+        } else {
+            showError(msg)
+        }
     }
 
     private fun showError(msg: String) {

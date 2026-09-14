@@ -66,6 +66,7 @@ node mobile-server.mjs --host 127.0.0.1  # 仅绑定本机
 
 - **扫码配对**：APP 内「扫码连接」直接扫 `schedule.html` 面板上的「公网访问」二维码（zxing-embedded，不依赖谷歌服务）；电脑重启后隧道地址变化时重新扫码即可；
 - **课前弹窗提醒**：APP 周期拉取服务端 `GET /api/plan`（提醒时刻由服务端 occur.js 单一实现算好），逐条交给系统 **AlarmManager 精确闹钟**，到点弹高优先级横幅通知——不依赖 FCM/谷歌服务，国内 ROM 锁屏/后台可收；PC 关机期间已排闹钟照常响。
+- **离线兜底（v1.3）**：连不上电脑端时（隧道换址 / 服务器重启 / 断网），不再困在错误屏——主框架加载失败自动切内置离线页，按**上次成功同步的课表**继续展示（今天为中心可翻 ±7 天，进行中/今日截止红边标注），顶部横幅提供「重新连接 / 重新扫码 / 手动输入地址」；页面层同理：加载成功后把课表交给壳落盘缓存，API 断连时按缓存渲染并显示离线横幅，重连成功自动恢复。离线页领域判定同样走 occur.js 单一实现（构建期从仓库根同步，assets 无手改副本）。
 
 其余功能（课表查看/编辑、DSH AI 对话、图片附件、模型切换）即 WebView 里的移动页本身，与浏览器完全同源。鉴权复用页面登录种下的 30 天会话 Cookie，无需二次输密码。
 
@@ -84,6 +85,8 @@ node .qrtest/md-render-test.mjs mobile.html       # markdown 渲染 + XSS 安全
 node .qrtest/new-chat-test.mjs mobile.html        # 新建对话（清屏/重连/旧流帧隔离）
 node .qrtest/live-refresh-test.mjs mobile.html    # 实时链路自愈（sid 换绑/撞号/日程节流刷新）
 node .qrtest/chat-setup-test.mjs                  # 系统设定注入/剥离（含日程修改规范内容）
+node .qrtest/page-tabs-test.mjs                   # 手机页分页/输入/思考块/注入剥离/离线兜底
+node .qrtest/offline-page-test.mjs                # APP 离线兜底页（缓存渲染/桥按钮/日期窗口钳制）
 ```
 
 ---
