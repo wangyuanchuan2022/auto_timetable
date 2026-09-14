@@ -147,5 +147,22 @@ const h2 = loadPage(new URL('../mobile.html', import.meta.url), { store: { 'tt-t
 ok(cls(h2.byId.pageChat).indexOf('on') !== -1, 'T8 上次停在对话页 → 重开直接进对话页');
 ok(cls(h2.byId.pageSched).indexOf('on') === -1, 'T8 日程页隐藏');
 
+console.log('-- T11 日程列表按时间顺序排列（时刻日程升序在前；任务无时刻沉底按截止升序）--');
+const pad2 = (n) => String(n).padStart(2, '0');
+const dn = new Date();
+const TODAY = dn.getFullYear() + '-' + pad2(dn.getMonth() + 1) + '-' + pad2(dn.getDate());
+const h3 = loadPage(new URL('../mobile.html', import.meta.url), { responses: { '/api/schedule': { events: [
+  // 故意乱序：晚间 / 任务(晚截止) / 午间 / 早八 / 任务(先截止)——旧实现 toMin(日期)=NaN 会让任务随机插队
+  { id: 'e-nite', type: 'once', date: TODAY, title: '晚间加课', start: '19:00', end: '20:30' },
+  { id: 't-late', type: 'task', title: '作业后截止', deadline: '2026-12-31' },
+  { id: 'e-noon', type: 'once', date: TODAY, title: '午间讨论', start: '12:30', end: '13:30' },
+  { id: 'e-morn', type: 'once', date: TODAY, title: '早八', start: '08:00', end: '09:35' },
+  { id: 't-soon', type: 'task', title: '作业先截止', deadline: '2026-10-01' },
+] } } });
+await flush(h3);
+const schedTitles = collect(h3.byId.list, el => cls(el).indexOf('title') !== -1).map(el => el.textContent);
+ok(JSON.stringify(schedTitles) === JSON.stringify(['早八', '午间讨论', '晚间加课', '作业先截止', '作业后截止']),
+  'T11 顺序 = 时刻日程按开始时间升序 → 任务按截止升序沉底');
+
 console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0); // 显式退出：页面脚本的 15s 僵尸自检 interval 会挂住事件循环

@@ -130,6 +130,7 @@ export function loadPage(pagePath, opts = {}) {
   class EventSourceStub { constructor() { this.readyState = 0; } close() {} }
 
   const calls = []; // 记录页面发起的 fetch（url 顺序），供测试断言
+  const respond = opts.responses || {}; // 测试按 URL 预置自定义 JSON 响应（如乱序课表）
   const sandbox = {
     console, Date, Promise, JSON, Math, Number, String, Array, Object, RegExp, parseInt, parseFloat, isNaN, isFinite, Set, Map,
     URL, URLSearchParams,
@@ -153,6 +154,7 @@ export function loadPage(pagePath, opts = {}) {
     EventSource: EventSourceStub,
     fetch: (url) => {
       calls.push(String(url));
+      if (respond[url]) return Promise.resolve({ ok: true, status: 200, json: async () => respond[url] });
       if (url === '/api/chat/models') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, current: { provider: 'p', model: 'm' } }) });
       if (url === '/api/schedule') return Promise.resolve({ ok: true, status: 200, json: async () => ({ events: [] }) });
       if (url === '/api/chat/reset') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, sessionId: 'session-new' }) });

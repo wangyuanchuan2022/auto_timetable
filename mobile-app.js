@@ -199,7 +199,17 @@
     function dayEvents(day) {
       if (!data || !Array.isArray(data.events)) return [];
       return data.events.filter(function (ev) { return occursOn(ev, day); })
-        .sort(function (a, b) { return toMin(a.start) - toMin(b.start); });
+        .sort(function (a, b) {
+          var ta = (a.type || 'once') === 'task' ? 1 : 0, tb = (b.type || 'once') === 'task' ? 1 : 0;
+          if (ta !== tb) return ta - tb; // 有起止时刻的日程在前；任务（无时刻）沉底
+          var sa = toMin(a.start), sb = toMin(b.start);
+          var na = isNaN(sa), nb = isNaN(sb);
+          if (na !== nb) return na ? 1 : -1; // 同组内缺时刻的沉底
+          if (sa !== sb) return sa - sb;
+          // 同刻/任务组内：任务按截止升序（先截止在前），再按 id/title 稳定序
+          return String(a.deadline || '').localeCompare(String(b.deadline || '')) ||
+                 String(a.id || a.title || '').localeCompare(String(b.id || b.title || ''));
+        });
     }
 
     function render() {
