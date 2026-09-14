@@ -946,24 +946,26 @@ async function main() {
     }
   }
 
+  // 隧道回连监听先绑，且必须拿到 BASE_PORT+1（默认 3191）——cloudflared 的 ingress 硬编码指向
+  // 该端口。先绑隧道口根治「直连口被占顺移进 3191、隧道被挤到高位」的静默漂移（2026-09-14 事故：
+  // 三实例竞态启动，隧道全量回直连引导页，探活只看状态码 200 未察觉）。3191 被占 = 已有实例在跑
+  // 或端口被其它程序占用：本实例 fail-closed 退出（双实例并跑会竞争写 schedule/settings，宁可不起）。
+  try {
+    const ts = await createServer(BASE_PORT + 1, true);
+    TUNNEL_PORT = BASE_PORT + 1;
+    ts.once('close', () => { TUNNEL_PORT = 0; });
+  } catch (err) {
+    console.error(`mobile-server: 回连端口 ${BASE_PORT + 1} 被占用（已有实例在跑或被其它程序占用），本实例退出`);
+    process.exit(1);
+  }
+
   let server = null, port = 0;
   for (let p = BASE_PORT; p < BASE_PORT + 10; p++) {
+    if (p === TUNNEL_PORT) continue;
     try { server = await createServer(p); port = p; break; }
     catch (err) { if (err?.code !== 'EADDRINUSE') throw err; }
   }
   if (!server) { console.error(`mobile-server: 端口 ${BASE_PORT}-${BASE_PORT + 9} 均被占用，启动失败`); process.exit(1); }
-
-  // 隧道回连监听：独立 loopback 端口（默认 3191 起），cloudflared 的 ingress 指向这里。
-  // 与直连端口分开，保证「转发头可信域」隔离：cf-connecting-ip 只在此端口被采信。
-  for (let p = BASE_PORT + 1; p < BASE_PORT + 10; p++) {
-    if (p === port) continue;
-    try {
-      const ts = await createServer(p, true);
-      TUNNEL_PORT = p;
-      ts.once('close', () => { TUNNEL_PORT = 0; });
-      break;
-    } catch (err) { if (err?.code !== 'EADDRINUSE') throw err; }
-  }
   TUNNEL_URL = (await loadTunnelInfo())?.url ?? null;
   tunnelStaticUrl = TUNNEL_URL; // named tunnel 固定地址优先；quick tunnel 走日志扫描
   await scanTunnelLog();
