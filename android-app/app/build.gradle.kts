@@ -13,8 +13,8 @@ android {
         applicationId = "io.github.wangyuanchuan2022.timetable"
         minSdk = 24
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.5"   // v1.5: 提醒计划窗 7→30 天（服务端 clamp 上限 14→60），离线安全期一个月
+        versionCode = 7
+        versionName = "1.6"   // v1.6: 图片附件原生解码桥（HEIC/HEIF 等 WebView 解不了的格式由壳解码）
     }
 
     signingConfigs {

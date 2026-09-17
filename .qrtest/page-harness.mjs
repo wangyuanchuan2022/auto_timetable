@@ -96,6 +96,36 @@ export function makeTextNode(t) {
   return { nodeType: 3, tagName: null, textContent: String(t), parentNode: null, children: [] };
 }
 
+/** canvas 桩：图片压缩路径需要 getContext('2d').drawImage 与 toDataURL */
+function makeCanvasAware(el, tag) {
+  if (String(tag).toLowerCase() === 'canvas') {
+    el.getContext = () => ({ drawImage() {} });
+    el.toDataURL = () => 'data:image/jpeg;base64,T1VU';
+  }
+  return el;
+}
+
+/** FileReader 桩：readAsDataURL 异步（微任务）回调 onload，内容取 file.__dataUrl（测试注入） */
+class FileReaderStub {
+  readAsDataURL(f) {
+    this.result = String((f && f.__dataUrl) || 'data:image/jpeg;base64,QUJD');
+    Promise.resolve().then(() => { if (typeof this.onload === 'function') this.onload(); });
+  }
+}
+
+/** Image 桩：src 赋值后异步（微任务）回调 onload；src 含 'heic' 时回调 onerror（模拟 WebView 解不了 HEIC） */
+class ImageStub {
+  constructor() { this.width = 2000; this.height = 1000; }
+  set src(v) {
+    this._src = v;
+    Promise.resolve().then(() => {
+      if (String(v).indexOf('heic') !== -1) { if (typeof this.onerror === 'function') this.onerror(); }
+      else if (typeof this.onload === 'function') this.onload();
+    });
+  }
+  get src() { return this._src; }
+}
+
 export function loadPage(pagePath, opts = {}) {
   const html = readFileSync(pagePath, 'utf8');
   // 页面主脚本已抽离为外链 mobile-app.js（mobile.html 内只余 <script src> 引用）：
@@ -138,16 +168,17 @@ export function loadPage(pagePath, opts = {}) {
     setTimeout, clearTimeout, setInterval, clearInterval,
     document: {
       getElementById: id => byId[id] || null,
-      createElement: t => makeEl(t),
+      createElement: t => makeCanvasAware(makeEl(t), t),
       createTextNode: t => makeTextNode(t),
       addEventListener() {},
       querySelector(sel) { return bodyEl.querySelector(sel); },
       body: bodyEl,
     },
+    FileReader: FileReaderStub,
+    Image: ImageStub,
     window: Object.assign({ prompt: () => null }, opts.nativeBridge ? { NativeBridge: opts.nativeBridge } : {}),
     navigator: {},
-    location: { protocol: 'http:', host: '127.0.0.1:3190', search: '', href: 'http://x/' },
-    localStorage: {
+    location: { protocol: 'http:', host: '127.0.0.1:3190', search: '', href: 'http://x/' },    localStorage: {
       getItem: (k) => (k in store ? store[k] : null),
       setItem(k, v) { store[k] = String(v); },
       removeItem(k) { delete store[k]; },
@@ -175,6 +206,7 @@ export function loadPage(pagePath, opts = {}) {
     calls,
     store,
     body: bodyEl,
+    sandbox, // 暴露沙箱：调试桩行为 / 直接测桩（如 FileReader、Image）
     send: (f) => lastWs && lastWs.onmessage({ data: JSON.stringify(f) }),
     ws: () => lastWs,
     flush: () => new Promise(r => setImmediate(r)),

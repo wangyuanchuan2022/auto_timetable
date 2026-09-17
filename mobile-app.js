@@ -1680,30 +1680,56 @@
       });
     }
 
-    // 非动图统一压缩：最长边 1568px、JPEG 82%（动图 gif 直接原样，保留动画）
+    // 非动图统一压缩：优先走原生桥（WebView 的 canvas 无法解码 HEIC/HEIF——Chromium 限制，
+    // Android BitmapFactory 可以），无桥或桥失败时回退 canvas 路线（浏览器环境行为不变）。
+    // 动图 gif 直接原样保留动画。
+    function canvasCompress(dataUrl, file, resolve, reject) {
+      var img = new Image();
+      img.onerror = function () { reject(new Error('图片解析失败（该格式手机端无法解码）')); };
+      img.onload = function () {
+        var maxSide = 1568;
+        var scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        var c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.width * scale));
+        c.height = Math.max(1, Math.round(img.height * scale));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        var out = c.toDataURL('image/jpeg', 0.82);
+        resolve({ mediaType: 'image/jpeg', data: out.split(',')[1], name: (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg', preview: out });
+      };
+      img.src = dataUrl;
+    }
+
     function compressImage(file) {
       return new Promise(function (resolve, reject) {
         var fr = new FileReader();
         fr.onerror = function () { reject(new Error('读取失败')); };
         fr.onload = function () {
           var dataUrl = String(fr.result);
+          var b64 = dataUrl.split(',')[1] || '';
           if (file.type === 'image/gif') {
-            resolve({ mediaType: 'image/gif', data: dataUrl.split(',')[1], name: file.name, preview: dataUrl });
+            resolve({ mediaType: 'image/gif', data: b64, name: file.name, preview: dataUrl });
             return;
           }
-          var img = new Image();
-          img.onerror = function () { reject(new Error('图片解析失败')); };
-          img.onload = function () {
-            var maxSide = 1568;
-            var scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-            var c = document.createElement('canvas');
-            c.width = Math.max(1, Math.round(img.width * scale));
-            c.height = Math.max(1, Math.round(img.height * scale));
-            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-            var out = c.toDataURL('image/jpeg', 0.82);
-            resolve({ mediaType: 'image/jpeg', data: out.split(',')[1], name: (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg', preview: out });
-          };
-          img.src = dataUrl;
+          // 原生桥优先：能解 HEIC/HEIF/AVIF 等 WebView 解不了的格式
+          var nb = nativeBridge();
+          if (nb && typeof nb.compressImage === 'function' && b64) {
+            try {
+              var out = nb.compressImage(b64, 1568);
+              if (out) {
+                resolve({
+                  mediaType: 'image/jpeg',
+                  data: out,
+                  name: (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg',
+                  preview: 'data:image/jpeg;base64,' + out
+                });
+                return;
+              }
+            } catch (e) { /* 桥异常 → 回退 canvas */ }
+            // 桥返回空 = 原生也解不了该格式：明确报错，不再静默
+            reject(new Error('该图片格式手机端无法解码（可先在相册里转存为 JPEG 再发）'));
+            return;
+          }
+          canvasCompress(dataUrl, file, resolve, reject);
         };
         fr.readAsDataURL(file);
       });
@@ -1716,13 +1742,18 @@
       var room = MAX_ATTACH - attachments.length;
       if (files.length > room) files = files.slice(0, room);
       var chain = Promise.resolve();
+      var ignored = []; // 被跳过的文件（非图片/无法解码）——统一提示，绝不静默丢图
       files.forEach(function (f) {
-        if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) return;
+        var t = String(f.type || '');
+        if (t && t.indexOf('image/') !== 0) { ignored.push((f.name || '文件') + '（非图片）'); return; }
         chain = chain.then(function () {
-          return compressImage(f).then(function (a) { attachments.push(a); renderThumbs(); });
+          return compressImage(f).then(function (a) { attachments.push(a); renderThumbs(); })
+            .catch(function (e) { ignored.push((f.name || '图片') + '：' + (e && e.message ? e.message : '处理失败')); });
         });
       });
-      chain.catch(function (e) { bubble('图片处理失败：' + e.message, 'bot'); });
+      chain.then(function () {
+        if (ignored.length) bubble('有 ' + ignored.length + ' 个文件未加入：' + ignored.join('；'), 'bot');
+      }).catch(function (e) { bubble('图片处理失败：' + (e && e.message ? e.message : e), 'bot'); });
     });
 
     var chatBusyUI = false;

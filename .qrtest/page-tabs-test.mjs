@@ -213,5 +213,49 @@ await flush(h6);
 ok(h6.body.querySelector('.tt-offline') === null, 'T12 缓存损坏时不进离线态');
 ok(String(h6.byId.list.textContent).indexOf('加载失败') !== -1, 'T12 缓存损坏时保留原错误文案');
 
+console.log('-- T13 图片附件：canvas 回退 / 原生桥优先 / 失败与非法文件都给明确提示 --');
+const imgFile = (name, type, dataUrl) => ({ name, type, __dataUrl: dataUrl || 'data:image/jpeg;base64,QUJD' });
+const thumbsOf = (h) => collect(h.byId.chatThumbs, el => cls(el).indexOf('thumb') !== -1);
+const bubblesOf = (h) => collect(h.log, el => cls(el).indexOf('bubble') !== -1);
+
+// A) 无原生桥（浏览器）：走 canvas 路线
+const hA = loadPage(new URL('../mobile.html', import.meta.url));
+hA.byId.chatFile.files = [imgFile('a.jpg', 'image/jpeg')];
+hA.byId.chatFile._ls.change();
+await flush(hA, 8);
+ok(thumbsOf(hA).length === 1, 'T13 无桥时 canvas 路线生成缩略图');
+
+// B) 有原生桥 + HEIC：优先走桥（WebView canvas 解不了 HEIC）
+const bridgeB = { refreshPlan() {}, calls: 0, compressImage() { bridgeB.calls++; return 'TkFUSVZF'; } };
+const hB = loadPage(new URL('../mobile.html', import.meta.url), { nativeBridge: bridgeB });
+hB.byId.chatFile.files = [imgFile('b.heic', 'image/heic')];
+hB.byId.chatFile._ls.change();
+await flush(hB, 8);
+ok(bridgeB.calls === 1, 'T13 HEIC 交给原生桥解码');
+ok(thumbsOf(hB).length === 1, 'T13 桥成功后生成缩略图');
+
+// C) 非图片文件：明确提示（旧实现静默丢弃）
+const hC = loadPage(new URL('../mobile.html', import.meta.url));
+hC.byId.chatFile.files = [{ name: 'doc.pdf', type: 'application/pdf' }];
+hC.byId.chatFile._ls.change();
+await flush(hC, 8);
+ok(bubblesOf(hC).some(b => String(b.textContent).indexOf('未加入') !== -1), 'T13 非图片文件给出明确提示');
+ok(thumbsOf(hC).length === 0, 'T13 非图片不产生缩略图');
+
+// D) 桥也解不了（返回空串）：明确提示而非静默
+const bridgeD = { refreshPlan() {}, compressImage() { return ''; } };
+const hD = loadPage(new URL('../mobile.html', import.meta.url), { nativeBridge: bridgeD });
+hD.byId.chatFile.files = [imgFile('c.heic', 'image/heic')];
+hD.byId.chatFile._ls.change();
+await flush(hD, 8);
+ok(bubblesOf(hD).some(b => String(b.textContent).indexOf('无法解码') !== -1), 'T13 原生也解不了时提示「无法解码」');
+
+// E) 无桥 + canvas 解不了（HEIC 直连 WebView）：提示解析失败
+const hE = loadPage(new URL('../mobile.html', import.meta.url));
+hE.byId.chatFile.files = [imgFile('d.heic', 'image/heic', 'data:image/heic;base64,QUJD')];
+hE.byId.chatFile._ls.change();
+await flush(hE, 8);
+ok(bubblesOf(hE).some(b => String(b.textContent).indexOf('未加入') !== -1), 'T13 无桥解码失败同样给出提示');
+
 console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0); // 显式退出：页面脚本的 15s 僵尸自检 interval 会挂住事件循环

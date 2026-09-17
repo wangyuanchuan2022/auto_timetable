@@ -4,6 +4,8 @@
 
 ## 编译验证记录
 
+**2026-09-17 v1.6 本机真实构建通过**：图片附件原生解码桥——`NativeBridge.compressImage(base64, maxSide)`（BitmapFactory 解码 → 等比缩放 → JPEG 82% → base64，失败返空串），解决 WebView canvas 无法解码 HEIC/HEIF（Chromium 限制）导致的「选图无反应」；页面侧改为「原生桥优先、canvas 回退」，并把原先**静默丢弃**的非法/无法解码文件改为明确提示（`accept` 同步补 image/heic,image/heif,image/avif）。回归：page-tabs-test 71（新增 T13 图片链路 7 例：canvas 回退/桥优先/非图片提示/桥返空提示/无桥解码失败提示）+ offline-page 27 全绿。页面层改动由服务端托管（刷新即生效），原生桥需装本版 APK。
+
 **2026-09-14 v1.5 本机真实构建通过**：提醒计划窗 **7→30 天**（用户要求：电脑关机/隧道长时间不通超过一周后，课前提醒不得整段消失）。三处联动——服务端 `/api/plan` days clamp 上限 14→60（APP 请求 days=30，老客户端缺省仍 7）、PlanPoller 请求 `?days=30`、AlarmScheduler MAX_ALARMS 80→250（30 天 × 每交易日 4-8 条 ≈ 120-240，items 升序取前 250 保最近的，截断语义安全）。离线安全期 = 计划窗长度：电脑失联 30 天内已排闹钟整段有效；网恢复后 WorkManager 6h 周期自动续排。学期末全排方案否决：约 500 条精确闹钟，国产 ROM 清理与 Doze 维护风险大于收益。回归：server-routes-test 67（I9 clamp=60）+ page-tabs 64 + offline-page 27 全绿。
 
 **2026-09-14 v1.3 / v1.4 本机真实构建通过**：v1.3（versionCode 4）离线兜底上线（主框架失败路由 assets 离线页，按壳落盘的上次课表渲染）；v1.4（versionCode 5）离线横幅升级——标题改「离线数据 · 上次同步 MM-dd HH:mm（N 天前同步）」，超 1 天显示陈旧警示（期间的电脑端改动不反映），并新增提醒计划状态行「提醒计划仍生效 · 下次提醒 MM-dd HH:mm」（桥 `nextReminderAt()` 从最近一次同步的提醒计划取未来最早一条，与 AlarmManager 已排闹钟同源；PlanPoller 失败路径不碰闹钟、BootReceiver 开机/覆盖安装按同一份缓存重排——离线不漏弹）。两次均 `gradlew assembleDebug` → `BUILD SUCCESSFUL`，aapt2 badging 核对版本号，assets（offline.html + occur.js 构建期同步）确认入包。回归：`.qrtest/page-tabs-test.mjs`（64 断言）+ `.qrtest/offline-page-test.mjs`（27 断言）全绿。

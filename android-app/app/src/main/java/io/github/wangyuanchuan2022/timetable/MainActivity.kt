@@ -246,6 +246,39 @@ class MainActivity : AppCompatActivity() {
         }
 
         /**
+         * 原生图片压缩（v1.6）：WebView 的 canvas 无法解码 HEIC/HEIF（Chromium 不支持），
+         * 由壳用 BitmapFactory 解码（Android 8+ 支持 HEIC）→ 等比缩小到 maxSide → JPEG 重编码 → base64。
+         * 入参 base64 不含 data: 前缀；成功返回 JPEG base64（无换行），失败/不支持返回空串
+         * （页面据此回退 canvas 路线或给出明确提示，绝不静默丢图）。
+         */
+        @JavascriptInterface
+        fun compressImage(base64: String, maxSide: Int): String {
+            return try {
+                val raw = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+                val bmp = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.size) ?: return ""
+                val side = if (maxSide > 0) maxSide else 1568
+                val scale = minOf(1f, side.toFloat() / maxOf(bmp.width, bmp.height))
+                val scaled = if (scale < 1f) {
+                    android.graphics.Bitmap.createScaledBitmap(
+                        bmp,
+                        (bmp.width * scale).toInt().coerceAtLeast(1),
+                        (bmp.height * scale).toInt().coerceAtLeast(1),
+                        true,
+                    )
+                } else {
+                    bmp
+                }
+                val bos = java.io.ByteArrayOutputStream()
+                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, bos)
+                if (scaled !== bmp) scaled.recycle()
+                bmp.recycle()
+                android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+            } catch (e: Exception) {
+                ""
+            }
+        }
+
+        /**
          * 下一个已排课前提醒的触发时间（MM-dd HH:mm；无则空串）。
          * 来源 = 最近一次成功同步的提醒计划（Prefs.lastPlanJson，与 AlarmScheduler 已排闹钟同源、
          * 同为 30 天窗 v1.5 起）：PlanPoller 拉取失败/离线时既有闹钟原样保留（见 PlanPoller 注释），
