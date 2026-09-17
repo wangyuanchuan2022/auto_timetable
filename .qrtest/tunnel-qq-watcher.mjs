@@ -1,8 +1,9 @@
 // tunnel-qq-watcher.mjs — 隧道换址/故障监视器（2026-09-14 用户要求：每分钟检查，异常主动报警）
 // 分工：守护 v2.1（30s 循环）负责一切 cloudflared 层 remediation；本监视器只做检测与报警：
 //   ① URL 变化且新地址健康 → exit 0（主会话发 QQ 通知新地址）；
-//   ② 公网 200 但回直连收口引导页（源站内容故障，2026-09-14 端口漂移事故签名）→ 立即 exit 3
-//     （主会话报警处置——此故障杀 cloudflared 无疗效，绝不重拉轮换 URL）；
+//   ② 源站侧故障（判据 v3，2026-09-15 收紧）——本地源站不可达/非 200、公网 200 回引导页、
+//     公网非 200 但边缘可达（502/504…）→ 连续 2 轮仍故障才 exit 3 报警（宽限避开 mobile-server
+//     重启窗口误报）；此档一律不 kick、不重拉——杀 cloudflared 只会轮换 URL 逼用户重扫码；
 //   ③ 公网彻底失联（dead）→ 4 分钟宽限后仍无新隧道出生（= 守护本身失能）→ 经 worktable
 //     重拉守护（10 分钟节流）；守护活着时 65s 内必自愈，无需本监视器插手。
 //   ④ kick 兜底升级（2026-09-14 用户要求，源自 13:38-13:52 坏脚本被兜底原样重拉事故）：kick 后
@@ -34,6 +35,8 @@ const GUARDIAN = 'D:\\tools\\auto_timetable\\.mobile-srv\\start-cloudflared.cmd'
 const GUARDIAN_BAK = GUARDIAN + '.lastgood';
 const RESTART_LOG = join(HERE, '..', '.mobile-srv', 'tunnel-restart.log');
 const ALARM_LOG = join(HERE, '..', '.mobile-srv', 'watcher-alarm.log');
+const TUNNEL_ERR_RE = /Error 1033|Argo Tunnel error/i; // CF 隧道层未连接错误页特征（隧道层故障，可 kick）
+const NOTICE_GRACE_MS = 2 * 60_000;                   // 源站侧故障宽限：连续 2 轮仍故障才报警（避开 mobile-server 重启窗口误报）
 
 let proxyAgent = null;
 try {
@@ -43,12 +46,27 @@ try {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fmt = (ms) => new Date(ms).toLocaleString('sv-SE', { hour12: false });
 
-// 'ok' | 'notice' | 'dead'（健康判据 = 200 且非引导页；与 tunnel-probe 同语义）
+// 三态判据 v3（与 tunnel-probe 同语义，2026-09-15 用户要求收紧）：
+//   'ok'     = 本地源站 200 且公网 200 非引导页
+//   'notice' = 【源站侧故障】本地源站不可达/非 200、公网 200 引导页、公网非 200 但边缘可达(502/504…)
+//              → 只报警不 kick（杀 cloudflared 只会轮换 URL 逼用户重扫码）
+//   'dead'   = 【隧道层故障】本地源站健康，但公网完全无 HTTP 响应 / CF 隧道错误页 → 等守护重拉
+function classifyPublic(local, pub) {
+  if (local !== 200) return 'notice';
+  if (pub.status === 200) return String(pub.body).includes('安全地址') ? 'notice' : 'ok';
+  if (pub.status !== null) return TUNNEL_ERR_RE.test(String(pub.body)) ? 'dead' : 'notice';
+  return 'dead';
+}
+
 async function probe(url) {
-  const verdict = (status, body) => {
-    if (status !== 200) return 'dead';
-    return String(body).includes('安全地址') ? 'notice' : 'ok';
-  };
+  // 本地源站探针：不通即源站侧故障（mobile-server 崩溃/重启/繁忙超时都属此类，不该 kick）
+  let localStatus = null;
+  try {
+    const r = await fetch('http://127.0.0.1:3191/api/status', { signal: AbortSignal.timeout(4000) });
+    localStatus = r.status;
+  } catch {}
+  if (localStatus !== 200) return 'notice';
+  const verdict = (status, body) => classifyPublic(localStatus, { status, body });
   try {
     const r = await fetch(url + '/api/status', { signal: AbortSignal.timeout(8000) });
     const v = verdict(r.status, await r.text());
@@ -56,14 +74,14 @@ async function probe(url) {
   } catch {}
   if (proxyAgent) {
     try {
-      return await new Promise((resolve, reject) => {
+      return await new Promise((resolve) => {
         const req = require('https').get(url + '/api/status', { agent: proxyAgent }, (res) => {
           let body = '';
           res.on('data', (c) => { if (body.length < 4096) body += c; });
           res.on('end', () => resolve(verdict(res.statusCode, body)));
         });
         req.on('error', () => resolve('dead'));
-        req.setTimeout(8000, () => req.destroy(new Error('timeout')));
+        req.setTimeout(8000, () => { req.destroy(); resolve('dead'); });
       });
     } catch {}
   }
@@ -148,8 +166,22 @@ if (process.argv.includes('--selftest')) {
     const got = decideEscalation(input);
     if (got !== want) { console.error(`[selftest] FAIL ${why}: want=${want} got=${got}`); fail++; }
   }
+  // 三态分类（源站侧一律 'notice'，绝不落入可 kick 的 'dead'）
+  const pubCases = [
+    [200, { status: 200, body: '{"ok":true}' }, 'ok', 'healthy'],
+    [200, { status: 200, body: '请使用安全地址访问' }, 'notice', 'notice page => origin side'],
+    [200, { status: 502, body: 'Bad gateway' }, 'notice', 'origin 502 => origin side, never kick'],
+    [200, { status: 504, body: 'timeout' }, 'notice', 'origin 504 => origin side'],
+    [null, { status: null, body: '' }, 'notice', 'local origin down => origin side'],
+    [200, { status: 530, body: 'Error 1033 Argo Tunnel error' }, 'dead', 'CF tunnel error => tunnel layer'],
+    [200, { status: null, body: '' }, 'dead', 'no response + local healthy => tunnel layer'],
+  ];
+  for (const [local, pub, want, why] of pubCases) {
+    const got = classifyPublic(local, pub);
+    if (got !== want) { console.error(`[selftest] FAIL ${why}: want=${want} got=${got}`); fail++; }
+  }
   if (fail) { console.error(`[selftest] ${fail} FAILURES`); process.exit(1); }
-  console.log(`[selftest] all ${cases.length} escalation-decision cases pass`);
+  console.log(`[selftest] all ${cases.length} escalation + ${pubCases.length} classify cases pass`);
   process.exit(0);
 }
 
@@ -160,6 +192,7 @@ let deadSince = 0;
 let lastKick = 0;
 let kickAt = 0;        // 本次 kick 的升级观察窗起点（恢复健康即清零）
 let reverted = false;  // lastgood 回退只做一次，回退后仍失败直接报警
+let noticeSince = 0;   // 源站侧故障起始时刻（连续 2 轮仍故障才报警）
 
 while (Date.now() - started < MAX_MS) {
   await sleep(POLL_MS);
@@ -171,16 +204,24 @@ while (Date.now() - started < MAX_MS) {
       process.exitCode = 0;
       break;
     }
-    if (deadSince || kickAt) console.log(`[watch] ${fmt(Date.now())} recovered healthy (same url) — escalation window cleared`);
+    if (deadSince || kickAt || noticeSince) console.log(`[watch] ${fmt(Date.now())} recovered healthy (same url) — escalation window cleared`);
     deadSince = 0;
     kickAt = 0;
     reverted = false;
+    noticeSince = 0;
     continue;
   }
   if (v === 'notice') {
-    console.log(`[watch] RESULT: ORIGIN FAULT at ${fmt(Date.now())} - public ${url} serves the notice page (200); cloudflared/edge fine, mobile-server side fault; ALARM (do not respawn cloudflared)`);
-    process.exitCode = 3;
-    break;
+    // 源站侧故障宽限：连续 2 轮仍故障才报警（避开 mobile-server 重启/抖动窗口的误报）
+    if (!noticeSince) {
+      noticeSince = Date.now();
+      console.log(`[watch] ${fmt(Date.now())} origin-side fault detected (local origin unreachable / notice page / edge-reachable error) — grace ${NOTICE_GRACE_MS / 60000}min before alarm`);
+    } else if (Date.now() - noticeSince >= NOTICE_GRACE_MS) {
+      console.log(`[watch] RESULT: ORIGIN FAULT at ${fmt(Date.now())} - origin-side fault persisted ${Math.round((Date.now() - noticeSince) / 1000)}s (url=${url}); cloudflared/edge presumed FINE; ALARM (do not respawn cloudflared)`);
+      process.exitCode = 3;
+      break;
+    }
+    continue;
   }
   // dead 分支
   if (!deadSince) {
