@@ -190,6 +190,8 @@ export function loadPage(pagePath, opts = {}) {
       if (opts.failUrls && opts.failUrls.indexOf(String(url)) !== -1) {
         return Promise.reject(new Error('network down (test stub)'));
       }
+      if (typeof respond[url] === 'string') return Promise.resolve({ ok: true, status: 200, text: async () => respond[url] }); // SSE/原文响应：测 chat 流帧处理
+      if (respond[url] && respond[url].__http) return Promise.resolve({ ok: false, status: respond[url].__http, text: async () => JSON.stringify(respond[url].body || {}) }); // 非 200 响应桩
       if (respond[url]) return Promise.resolve({ ok: true, status: 200, json: async () => respond[url] });
       if (url === '/api/chat/models') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, current: { provider: 'p', model: 'm' } }) });
       if (url === '/api/schedule') return Promise.resolve({ ok: true, status: 200, json: async () => ({ events: [] }) });

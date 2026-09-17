@@ -1793,7 +1793,9 @@
           load();
         } else if (j.t === 'error') {
           dropLive();
-          bubble('发送失败：' + (j.error || 'unknown'), 'bot');
+          // soft=true：服务端已停止等待，但 DSH 会话可能仍在处理（思考/工具）——
+          // 不是发送失败：回复完成后会经 watch 流照常出现在对话区，措辞不写「失败」。
+          bubble((j.soft ? '⏳ ' : '发送失败：') + (j.error || 'unknown'), 'bot');
         }
       }
 
@@ -1802,7 +1804,17 @@
         headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
         body: JSON.stringify({ message: text, images: imgs })
       }).then(function (r) {
-        if (!r.ok) throw new Error('http ' + r.status);
+        if (!r.ok) {
+          // 429（服务端还在处理上一条消息）不是发送失败：读出服务端文案给 ⏳ 稍候提示；
+          // 其余非 200 仍走「发送失败」明确文案。
+          return r.text().then(function (t) {
+            var msg = 'http ' + r.status;
+            try { var jj = JSON.parse(t); if (jj && jj.error) msg = jj.error; } catch (e) {}
+            var err = new Error(msg);
+            err.softBusy = (r.status === 429);
+            throw err;
+          });
+        }
         if (r.body && r.body.getReader) {
           var reader = r.body.getReader();
           var dec = new TextDecoder();
@@ -1825,7 +1837,7 @@
       }).catch(function (err) {
         if (gen !== chatGen) return; // 会话已重建：旧流失败不写入新对话
         dropLive();
-        bubble('发送失败：' + (err.message || err), 'bot');
+        bubble((err.softBusy ? '⏳ ' : '发送失败：') + (err.message || err), 'bot');
       }).then(function () {
         if (gen !== chatGen) return;
         chatBusyUI = false;

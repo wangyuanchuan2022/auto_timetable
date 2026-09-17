@@ -32,7 +32,7 @@ import { withSetup, stripSetup, hasSetup, isHostInjection } from './chat-setup.m
 import TTOccur from './occur.js'; // 共享领域判定核心（与网页端 / Python timetable_core.py 同一语义）
 import {
   createRouteDispatcher, checkPin, clientIpOf, pinIsSet, hashPin, isLoopbackHostname,
-  sendJSON,
+  sendJSON, chatWaitVerdict, CHAT_WAIT,
 } from './server-routes.mjs';
 
 const require = createRequire(import.meta.url);
@@ -301,14 +301,19 @@ async function chatOnce(message, images, onPartial) {
   if (!inited) { settings.chatInited = true; await saveSettings(settings); }
   onPartial?.('');
 
-  // 轮询收尾：出现 marker 之后的 assistant/message 且 3 秒无新事件 → 完成；最长等 120 秒
+  // 轮询等待（chatWaitVerdict 裁决）：思考（reasoning-delta）/工具调用都会推进事件流 seq，
+  // 有新事件就继续等——旧实现从发送起算 120 秒墙钟，长思考回合被误报「发送失败」，
+  // 而 DSH 会话其实还在跑、回复稍后照常经 watch 流送达。
   let collected = '';
   let stable = 0;
   let lastSeen = -1;
   let lastPartial = null;
-  const deadline = Date.now() + 120_000;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1500));
+  let lastCollected = '';
+  const startedAt = Date.now();
+  let lastProgressAt = startedAt;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, CHAT_WAIT.POLL_MS));
+    const now = Date.now();
     const h = await dshRpc('session.history', { sessionId: sid, maxMessages: 30 });
     const evs = (h?.events ?? []).map((e) => e.event).filter(Boolean);
     const tail = Math.max(-1, ...evs.map((e) => e.seq ?? 0));
@@ -333,12 +338,21 @@ async function chatOnce(message, images, onPartial) {
       if (POISON_RE.test(streamErr)) err.poisoned = true;
       throw err;
     }
-    if (tail === lastSeen && collected) { stable++; if (stable >= 2) return { reply: collected }; }
-    else stable = 0;
+    const progress = tail > lastSeen || collected !== lastCollected;
+    const inactiveMs = progress ? 0 : now - lastProgressAt;
+    if (progress) lastProgressAt = now;
+    stable = progress || !collected ? 0 : stable + 1;
+    const v = chatWaitVerdict({ progress, collected, stable, inactiveMs, totalMs: now - startedAt });
+    if (v.act === 'done') return { reply: collected };
+    if (v.act === 'giveup') {
+      if (collected) return { reply: collected, timeout: true };
+      const err = new Error(v.reason);
+      err.softTimeout = true; // 非失败：DSH 可能仍在处理，客户端按「继续等待」提示而非「发送失败」
+      throw err;
+    }
     lastSeen = tail;
+    lastCollected = collected;
   }
-  if (collected) return { reply: collected, timeout: true };
-  throw new Error('DSH 未在 120 秒内回复');
 }
 
 async function chatWithDsh(message, images = [], onPartial) {

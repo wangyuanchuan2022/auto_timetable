@@ -257,5 +257,43 @@ hE.byId.chatFile._ls.change();
 await flush(hE, 8);
 ok(bubblesOf(hE).some(b => String(b.textContent).indexOf('未加入') !== -1), 'T13 无桥解码失败同样给出提示');
 
+console.log('-- T14 chat 流 error 帧：soft（仍在思考）不显示「发送失败」，硬错误保留 --');
+const sse = (frames) => frames.map((f) => 'data: ' + JSON.stringify(f) + '\n\n').join('');
+// A) soft 帧：服务端停止等待但 DSH 可能仍在处理 → 措辞为 ⏳ 继续等待，不写「发送失败」
+const hF = loadPage(new URL('../mobile.html', import.meta.url), {
+  store: { 'tt-tab': 'chat' },
+  responses: { '/api/chat/stream': sse([
+    { t: 'open' },
+    { t: 'error', soft: true, error: 'DSH 已 3 分钟没有任何动静，已停止等待；若它稍后完成，回复仍会出现在对话流里' },
+  ]) },
+});
+hF.byId.chatIn.value = '帮我把周五英语挪到下午';
+hF.byId.chatIn._ls.keydown({ key: 'Enter', ctrlKey: true, preventDefault() {} });
+await flush(hF, 5);
+const fBubbles = () => bubblesOf(hF).map((b) => String(b.textContent));
+ok(fBubbles().some((t) => t.indexOf('⏳') !== -1 && t.indexOf('停止等待') !== -1), 'T14 soft 帧显示 ⏳ 继续等待提示');
+ok(fBubbles().every((t) => t.indexOf('发送失败') === -1), 'T14 soft 帧不出现「发送失败」字样');
+// B) 硬错误帧（模型/请求层真实失败）→ 仍然明确显示「发送失败」
+const hG = loadPage(new URL('../mobile.html', import.meta.url), {
+  store: { 'tt-tab': 'chat' },
+  responses: { '/api/chat/stream': sse([{ t: 'open' }, { t: 'error', error: 'DSH 处理失败：model error' }]) },
+});
+hG.byId.chatIn.value = '再来一条';
+hG.byId.chatIn._ls.keydown({ key: 'Enter', ctrlKey: true, preventDefault() {} });
+await flush(hG, 5);
+ok(bubblesOf(hG).some((b) => String(b.textContent).indexOf('发送失败：DSH 处理失败：model error') !== -1), 'T14 硬错误帧保留「发送失败」明确文案');
+ok(hG.byId.chatSend.disabled === false && hG.byId.chatAttach.disabled === false, 'T14 错误帧后发送/附件按钮复位');
+// C) 429（服务端还在处理上一条）：显示 ⏳ 稍候提示 + 服务端文案，不写「发送失败：http 429」
+const hH = loadPage(new URL('../mobile.html', import.meta.url), {
+  store: { 'tt-tab': 'chat' },
+  responses: { '/api/chat/stream': { __http: 429, body: { ok: false, error: 'DSH 正在处理上一条消息，请稍候' } } },
+});
+hH.byId.chatIn.value = '排队测试';
+hH.byId.chatIn._ls.keydown({ key: 'Enter', ctrlKey: true, preventDefault() {} });
+await flush(hH, 5);
+const hBubbles = () => bubblesOf(hH).map((b) => String(b.textContent));
+ok(hBubbles().some((t) => t.indexOf('⏳') !== -1 && t.indexOf('DSH 正在处理上一条消息') !== -1), 'T14 429 显示 ⏳ + 服务端文案');
+ok(hBubbles().every((t) => t.indexOf('发送失败') === -1 && t.indexOf('http 429') === -1), 'T14 429 不出现「发送失败/http 429」字样');
+
 console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0); // 显式退出：页面脚本的 15s 僵尸自检 interval 会挂住事件循环

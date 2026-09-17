@@ -364,6 +364,40 @@ export function buildPlanItems(events, now, days = 7) {
   return items;
 }
 
+// ==================== 对话回复等待裁决（纯函数） ====================
+
+/** chat 等待参数：长思考/长工具链的回合不再被固定墙钟掐死。 */
+export const CHAT_WAIT = {
+  POLL_MS: 1500,               // session.history 轮询间隔
+  STABLE_POLLS: 2,             // 回复已出且事件流连续 N 轮无变化 → 稳定收尾（沿用旧语义）
+  INACTIVITY_MS: 3 * 60_000,   // 连续这么久零新事件才判「无动静」（思考/工具都会推 seq）
+  OVERALL_MS: 15 * 60_000,     // 单次等待总上限（防永久占住发送锁）
+};
+
+/**
+ * chatWaitVerdict({progress, collected, stable, inactiveMs, totalMs}, limits?) → 等待裁决。
+ *
+ * 修复「手机显示发送失败、其实 DSH 只是在思考」：旧实现从发送起算 120 秒墙钟，一到即
+ * 报「DSH 未在 120 秒内回复」，但 DSH 会话并未终止——思考与工具继续跑，最终回复稍后
+ * 经 watch 流照常送达手机。思考（reasoning-delta）、tool/call、tool/result 都会推进
+ * 事件流 seq，因此「tail 有新事件」= 仍在推进（progress），绝不因墙钟放弃；
+ * 只在两种情况放弃等待（放弃 ≠ 失败，回复稍后仍会出现在对话流）：
+ *   a) 尚无回复文本且静默超 INACTIVITY_MS（真·没有任何动静）；
+ *   b) 等待总时长超 OVERALL_MS（此时若已有部分回复文本，调用方按超时收尾返回它）。
+ * 返回 { act:'done' } | { act:'giveup', reason } | { act:'wait' }。
+ * stable 语义与旧循环一致：已收集到回复且本轮无任何进展时递增，连续达 STABLE_POLLS 即 done。
+ */
+export function chatWaitVerdict(s, limits = CHAT_WAIT) {
+  if (s.collected && !s.progress && s.stable >= limits.STABLE_POLLS) return { act: 'done' };
+  if (!s.collected && s.inactiveMs > limits.INACTIVITY_MS) {
+    return { act: 'giveup', reason: `DSH 已 ${Math.round(limits.INACTIVITY_MS / 60000)} 分钟没有任何动静，已停止等待；若它稍后完成，回复仍会出现在对话流里` };
+  }
+  if (s.totalMs > limits.OVERALL_MS) {
+    return { act: 'giveup', reason: `本轮等待已超过 ${Math.round(limits.OVERALL_MS / 60000)} 分钟上限，已停止等待；若它稍后完成，回复仍会出现在对话流里` };
+  }
+  return { act: 'wait' };
+}
+
 // ==================== 路由分发（服务层经 deps 注入） ====================
 
 /** chat 系路由 body 上限：4×7MB base64 图片承诺 + 余量（原 12MB 会把多张大图整体拒掉）。 */
@@ -576,7 +610,7 @@ export function createRouteDispatcher(deps) {
       const ka = sseKeepalive(req, res, () => closed, () => { closed = true; });
       chatWithDsh(message, images, (partial) => send({ t: 'partial', text: partial }))
         .then((r) => { clearInterval(ka); send({ t: 'done', reply: r.reply, timeout: !!r.timeout }); try { res.end(); } catch (e) {} })
-        .catch((e) => { clearInterval(ka); send({ t: 'error', error: String(e?.message ?? e) }); try { res.end(); } catch (e2) {} });
+        .catch((e) => { clearInterval(ka); send({ t: 'error', error: String(e?.message ?? e), soft: !!e?.softTimeout }); try { res.end(); } catch (e2) {} });
       return true;
     }
     if (req.method === 'GET' && pathname === '/api/chat/watch') {

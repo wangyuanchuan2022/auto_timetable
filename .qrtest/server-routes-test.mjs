@@ -7,6 +7,7 @@ import {
   checkPin, guardPin, clientIpOf, corsHeaders, directNoticePage,
   parseCookies, isLoopbackHostname, isLoopbackAddr, isPurgeableEvent,
   buildPlanItems,
+  chatWaitVerdict, CHAT_WAIT,
   COOKIE_NAME, SESSION_MAX, SESSION_TTL,
 } from '../server-routes.mjs';
 
@@ -321,6 +322,31 @@ section('I) /api/plan 课前提醒计划');
   check('I9 有凭据 200：days clamp 到 60、items 升序非空', resOk.status === 200 && j.ok === true && j.days === 60
     && Array.isArray(j.items) && j.items.length > 0, `status=${resOk.status} days=${j && j.days} n=${j && j.items && j.items.length}`);
   await fs.rm(tmpPath, { force: true });
+}
+
+// ========== J. chatWaitVerdict（回复等待裁决：「发送失败但其实在思考」根因修复） ==========
+section('J) chatWaitVerdict 等待裁决');
+{
+  // 基准入参：无回复、无进展、刚轮询完一轮
+  const base = { progress: false, collected: '', stable: 0, inactiveMs: 1500, totalMs: 1500 };
+  check('J1 持续有新事件（思考/工具推进 seq）：超过旧 120s 墙钟也继续等', chatWaitVerdict(
+    { ...base, progress: true, inactiveMs: 0, totalMs: 10 * 60_000 }).act === 'wait');
+  check('J2 静默未超 3 分钟：继续等', chatWaitVerdict({ ...base, inactiveMs: CHAT_WAIT.INACTIVITY_MS - 1000 }).act === 'wait');
+  check('J3 静默恰等于阈值（不严格大于）：继续等', chatWaitVerdict({ ...base, inactiveMs: CHAT_WAIT.INACTIVITY_MS }).act === 'wait');
+  const gv = chatWaitVerdict({ ...base, inactiveMs: CHAT_WAIT.INACTIVITY_MS + 1 });
+  check('J4 无回复且静默超 3 分钟：giveup 且理由含「没有任何动静」', gv.act === 'giveup' && gv.reason.includes('没有任何动静'), JSON.stringify(gv));
+  const gv2 = chatWaitVerdict({ ...base, totalMs: CHAT_WAIT.OVERALL_MS + 1 });
+  check('J5 无回复超总上限：giveup 且理由含「上限」', gv2.act === 'giveup' && gv2.reason.includes('上限'), JSON.stringify(gv2));
+  check('J6 已有回复且持续有新事件超总上限：giveup（调用方按超时返回已收文本）', chatWaitVerdict(
+    { progress: true, collected: '部分回复', stable: 0, inactiveMs: 0, totalMs: CHAT_WAIT.OVERALL_MS + 1 }).act === 'giveup');
+  check('J7 已有回复且事件流连续 2 轮无变化：done（稳定收尾语义与旧循环一致）', chatWaitVerdict(
+    { ...base, collected: '最终回复', stable: CHAT_WAIT.STABLE_POLLS, inactiveMs: 4500, totalMs: 6000 }).act === 'done');
+  check('J8 已有回复但仅 1 轮无变化：再等一轮', chatWaitVerdict(
+    { ...base, collected: '最终回复', stable: CHAT_WAIT.STABLE_POLLS - 1, inactiveMs: 3000, totalMs: 4500 }).act === 'wait');
+  check('J9 无回复时 stable 再大也不算完成', chatWaitVerdict(
+    { ...base, stable: 99, inactiveMs: 60_000, totalMs: 61_500 }).act === 'wait');
+  check('J10 思考中每轮都有新事件（inactiveMs 恒 0）：永不因静默误判', chatWaitVerdict(
+    { progress: true, collected: '', stable: 0, inactiveMs: 0, totalMs: CHAT_WAIT.OVERALL_MS - 1 }).act === 'wait');
 }
 
 console.log(`\nserver-routes.mjs\n  通过 ${pass} / 失败 ${fail}`);
