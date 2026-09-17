@@ -12,9 +12,16 @@
 //     - 200 且 body 不含引导页签名 → 健康（exit 0）
 //     - 200 且含引导页签名「安全地址」→ 源站内容故障（exit 3）
 //     - 非 200 但【收到 HTTP 状态码】= 边缘可达、病根在源站/转发层 → exit 3（不击杀）
-//     - 例外：Cloudflare 隧道错误页（Error 1033 / Argo Tunnel）= 隧道层未连接 → exit 2
-//     - 完全无 HTTP 响应（直连 + 代理两轮皆失败/超时）= 真僵尸 → exit 2
-//       （此时本地源站已确认健康，重拉 cloudflared 对症）
+//     - 例外：Cloudflare 隧道错误页（Error 1033 / Argo Tunnel）= 隧道层未连接
+//     - 完全无 HTTP 响应（直连 + 代理两轮皆失败/超时）= 隧道层失联
+//       以上两种隧道层情形**不立即击杀**，而是走跨轮窗口（见下）。
+//
+// 隧道层击杀窗口（v3.1，2026-09-17 用户要求）：守护每 30 秒调用本脚本一次，隧道层失败需
+//   **连续 ≥6 轮 且 首败至今 ≥3 分钟**（状态存 .mobile-srv/probe-state.json）才 exit 2 授权击杀；
+//   未达阈值一律 exit 0（hold，不动作）——用于吸收公网抖动、代理短暂不可用、边缘连接重建期，
+//   消灭 2026-09-15 00:05 那类「十几秒抖动 → 击杀 → 换址 → 用户被迫重扫码」的误杀
+//   （v3 之前单次调用内约 10 秒全败即判僵尸——比 30 秒循环更短的窗口）。
+//   击杀授权后计数清零，避免连环击杀（v2 曾每 30 秒连杀，见 09-10 22:11 记录）。
 //
 // 诊断落盘：每次运行输出单行摘要；守护把 stdout/stderr 覆盖写 .mobile-srv/probe.log，
 //   供事后回溯「上次为什么这样分档」（v2 输出被重定向到 nul，2026-09-15 事故无法回溯的教训）。
@@ -22,7 +29,7 @@
 // 注意：结尾用 process.exitCode 而非 process.exit——exit 会打断未关闭的 fetch 句柄触发
 // libuv 断言崩溃（win/async.c），exitCode 让事件循环自然排空后以正确码退出。
 import { createRequire } from 'node:module';
-import { appendFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, statSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,6 +46,27 @@ function writeProbeLog(line) {
     try { if (statSync(PROBE_LOG).size > 256 * 1024) writeFileSync(PROBE_LOG, ''); } catch {}
     appendFileSync(PROBE_LOG, `[${new Date().toISOString()}] ${line}\n`);
   } catch {}
+}
+
+// ---- 隧道层击杀窗口（v3.1）：跨轮累计，吸收短暂抖动 ----
+const TUNNEL_FAIL_ROUNDS = 6;              // 连续失败轮数下限（守护 30s 一轮 ≈ 3 分钟）
+const TUNNEL_FAIL_WINDOW_MS = 3 * 60_000;  // 首败至今时间窗下限（与轮数双条件，防高频调用误判）
+const PROBE_STATE = join(dirname(fileURLToPath(import.meta.url)), '..', '.mobile-srv', 'probe-state.json');
+
+function readState() {
+  try { return JSON.parse(readFileSync(PROBE_STATE, 'utf8')) || {}; } catch { return {}; }
+}
+function writeState(s) {
+  try { writeFileSync(PROBE_STATE, JSON.stringify(s)); } catch {}
+}
+/** 纯函数：隧道层失败累计决策（--selftest 覆盖）；state=上次状态，返回本次判定与累计计数。 */
+function decideTunnelKill(state, now = Date.now()) {
+  const prev = (state && Number.isFinite(state.fails) && state.fails > 0) ? state : { fails: 0, firstFailAt: 0 };
+  const fails = prev.fails + 1;
+  const firstFailAt = prev.firstFailAt || now;
+  const windowMs = now - firstFailAt;
+  const kill = fails >= TUNNEL_FAIL_ROUNDS && windowMs >= TUNNEL_FAIL_WINDOW_MS;
+  return { kill, fails, firstFailAt, windowMs };
 }
 
 const require = createRequire(import.meta.url); // ESM 下裸 require 未定义会静默禁用代理双路（2026-09-14 修复）
@@ -91,8 +119,21 @@ if (process.argv.includes('--selftest')) {
     const got = classify(local, pub).code;
     if (got !== want) { console.error(`[selftest] FAIL ${why}: want=${want} got=${got}`); fail++; }
   }
+  // 隧道层击杀窗口状态机（含负向：轮数够但窗口不够 / 窗口够但轮数不够，都不得击杀）
+  const T = 1_000_000;
+  const tk = [
+    [{ fails: 0, firstFailAt: 0 }, T, false, 'first tunnel-layer failure holds'],
+    [{ fails: 4, firstFailAt: T }, T + 60_000, false, '5th round but 60s window holds'],
+    [{ fails: 5, firstFailAt: T }, T + 60_000, false, '6 rounds but window below 3min holds'],
+    [{ fails: 5, firstFailAt: T }, T + TUNNEL_FAIL_WINDOW_MS, true, '6 rounds + 3min window authorizes kill'],
+    [{ fails: 2, firstFailAt: T }, T + 10 * 60_000, false, 'long window but only 3 rounds holds'],
+  ];
+  for (const [state, now, want, why] of tk) {
+    const got = decideTunnelKill(state, now).kill;
+    if (got !== want) { console.error(`[selftest] FAIL ${why}: want=${want} got=${got}`); fail++; }
+  }
   if (fail) { console.error(`[selftest] ${fail} FAILURES`); process.exit(1); }
-  console.log(`[selftest] all ${cases.length} classify cases pass`);
+  console.log(`[selftest] all ${cases.length} classify + ${tk.length} tunnel-window cases pass`);
   process.exit(0);
 }
 
@@ -133,12 +174,14 @@ try {
 
 if (localStatus === 200 && !url) {
   // 源站健康但隧道 URL 未注册：可能 cloudflared 正在启动/注册中——不动作（与 v2 语义一致）
+  writeState({ fails: 0, firstFailAt: 0 });
   const line = '[probe] local=200 public=n/a verdict=0 (origin healthy, tunnel url not registered yet - no action)';
   console.log(line);
   writeProbeLog(line);
   process.exitCode = 0;
 } else if (localStatus !== 200) {
   const v = classify(localStatus, { status: null, body: '' });
+  writeState({ fails: 0, firstFailAt: 0 }); // 源站侧故障不计入隧道层失败计数
   const line = `[probe] local=${localStatus === null ? 'unreachable' : localStatus} public=n/a verdict=${v.code} (${v.why})`;
   console.log(line);
   writeProbeLog(line);
@@ -163,14 +206,30 @@ if (localStatus === 200 && !url) {
   console.log(line);
   writeProbeLog(line);
   if (v.code === 3) {
+    writeState({ fails: 0, firstFailAt: 0 }); // 源站侧故障：清零隧道层计数（它不属于隧道层问题）
     const l2 = '[origin-fault] origin-side fault (local origin ok but public not healthy) - cloudflared/edge FINE, do NOT respawn; alarm upstream';
     console.log(l2);
     writeProbeLog(l2);
+    process.exitCode = 3;
+  } else if (v.code === 2) {
+    // 隧道层失败：跨轮累计，未达窗口不动作（吸收抖动/边缘重建期）
+    const d = decideTunnelKill(readState(), Date.now());
+    const base = `[tunnel-layer] ${v.why}`;
+    if (d.kill) {
+      writeState({ fails: 0, firstFailAt: 0 }); // 授权击杀后清零，避免连环击杀
+      const l2 = `${base} | persisted ${d.fails} rounds / ${Math.round(d.windowMs / 1000)}s (>=${TUNNEL_FAIL_ROUNDS} rounds & >=${TUNNEL_FAIL_WINDOW_MS / 60000}min) - KILL+RESPAWN authorized: ${url}`;
+      console.log(l2);
+      writeProbeLog(l2);
+      process.exitCode = 2;
+    } else {
+      writeState({ fails: d.fails, firstFailAt: d.firstFailAt });
+      const l2 = `${base} | round ${d.fails}/${TUNNEL_FAIL_ROUNDS}, window ${Math.round(d.windowMs / 1000)}s/${TUNNEL_FAIL_WINDOW_MS / 1000}s - transient suspected, HOLD (no kill)`;
+      console.log(l2);
+      writeProbeLog(l2);
+      process.exitCode = 0;
+    }
+  } else {
+    writeState({ fails: 0, firstFailAt: 0 }); // 健康：清零计数
+    process.exitCode = 0;
   }
-  if (v.code === 2) {
-    const l2 = '[zombie] tunnel layer dead (local origin healthy, no public HTTP response / CF tunnel error page): ' + url;
-    console.log(l2);
-    writeProbeLog(l2);
-  }
-  process.exitCode = v.code;
 }
