@@ -205,6 +205,18 @@
     /* ===== 横屏周视图：与电脑端同语义的时间网格（7 列 + 时间轴 + 跨午夜拆段 + 重叠分列） =====
        注：网格线间距 36px 与 mobile-app.js renderWeek 的 PX_PER_HOUR=36 同步改。 */
     #weekGrid { display: none; }
+    /* 周切换栏（仅横屏显示）：‹ 上一周 / 周区间标签 / › 下一周 / 回到本周 */
+    #wkBar { display: none; }
+    #wkBar .wkNavBtn {
+      flex: none; min-width: 34px; padding: 5px 12px; border-radius: 8px;
+      border: 1px solid #d1d5db; background: transparent; color: inherit;
+      font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    #wkBar .wkNavBtn:disabled { opacity: .4; cursor: default; }
+    #wkBar #wkLabel {
+      flex: 1; min-width: 0; text-align: center; font-size: 12.5px; font-weight: 600;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .wkHead { display: grid; grid-template-columns: 34px repeat(7, 1fr); gap: 3px; margin-bottom: 4px; }
     .wkDay {
       font-size: 10.5px; font-weight: 600; text-align: center; padding: 4px 0;
@@ -236,14 +248,16 @@
     @media (orientation: landscape) {
       .pageSched .wrap { max-width: none; padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
       .pageSched .head input[type="date"], .pageSched #notifyRow, .pageSched #list { display: none; }
+      .pageSched #wkBar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
       .pageSched #weekGrid { display: block; }
-      .pageSched #weekGrid .wkBody { max-height: calc(100vh - 130px); overflow-y: auto; }
+      .pageSched #weekGrid .wkBody { max-height: calc(100vh - 168px); overflow-y: auto; }
     }
     @media (prefers-color-scheme: dark) {
       .wkDay { background: rgba(128,128,128,.18); }
       .wkDayGrid { border-left-color: rgba(128,128,128,.22); background-image: repeating-linear-gradient(to bottom, rgba(128,128,128,.2) 0 1px, transparent 1px 36px); }
       .wkBlock { border-color: #262b36; }
       .wkBlockTime, .wkBlockLoc { color: #9aa4b2; }
+      #wkBar .wkNavBtn { border-color: #262b36; }
     }
   </style>
 </head>
@@ -261,6 +275,13 @@
         <span id="notifyState" style="font-size:11.5px;color:#6b7280">提醒为页面内弹窗</span>
       </div>
       <div class="loading" id="list">加载中…</div>
+      <!-- 周切换栏：仅横屏显示（‹ 上一周 / 周区间 / › 下一周 / 回到本周） -->
+      <div id="wkBar">
+        <button type="button" class="wkNavBtn" id="wkPrev">‹ 上周</button>
+        <span id="wkLabel"></span>
+        <button type="button" class="wkNavBtn" id="wkNext">下周 ›</button>
+        <button type="button" class="wkNavBtn" id="wkNowBtn">本周</button>
+      </div>
       <!-- 横屏周视图容器：竖屏隐藏，横屏（orientation: landscape）替换单日列表展示全周 -->
       <div id="weekGrid"></div>
     </div>

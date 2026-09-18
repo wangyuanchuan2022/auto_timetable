@@ -1,8 +1,9 @@
-// landscape-week-test.mjs — 手机端横屏周视图（时间网格）回归测试。
-// 覆盖：mobile.html 静态结构（#weekGrid + landscape 显隐规则 + 时间网格样式）、
+// landscape-week-test.mjs — 手机端横屏周视图（时间网格 + 周切换）回归测试。
+// 覆盖：mobile.html 静态结构（#weekGrid + #wkBar 周切换栏 + landscape 显隐规则 + 时间网格样式）、
 // renderWeek 行为（七列周一..周日、按时间定位的块、跨午夜拆段/次日续、重叠分列、
 // skip 生效、任务截止日红横幅、今日列高亮与当前时刻线、块点击接 openDialog、
-// 重渲染幂等）、真实 schedule.json 冒烟（逐列块数与独立拆段口径一致；不落数据）。
+// 重渲染幂等）、周切换（‹/› 上下周、标签相对周名、回本周复位、切走后无今日高亮/时刻线、
+// 日期变更归零偏移）、真实 schedule.json 冒烟（逐列块数与独立拆段口径一致；不落数据）。
 // 运行：node .qrtest/landscape-week-test.mjs
 import { readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -27,6 +28,13 @@ check('通知行有 id（横屏隐藏定位用）', /id="notifyRow"/.test(html))
 check('时间网格样式齐备（时间轴/块/横幅/时刻线）', ['.wkGutter', '.wkHour', '.wkDayGrid', '.wkBlock', '.wkDue', '.wkNow'].every((c) => html.indexOf(c) !== -1));
 check('周视图有深色模式适配', html.indexOf('.wkBlock { border-color: #262b36; }') !== -1);
 check('网格线 36px 与 PX_PER_HOUR 同步（防止只改一边）', html.indexOf('transparent 1px 36px') !== -1 && readFileSync(new URL('../mobile-app.js', import.meta.url), 'utf8').indexOf('PX_PER_HOUR = 36') !== -1);
+// 周切换栏（#wkBar）静态结构
+const harnessSrc = readFileSync(new URL('./page-harness.mjs', import.meta.url), 'utf8');
+check('周切换栏存在且四件齐备（‹/标签/›/回本周）', ['id="wkBar"', 'id="wkPrev"', 'id="wkNext"', 'id="wkLabel"', 'id="wkNowBtn"'].every((s) => html.indexOf(s) !== -1));
+check('周切换栏竖屏隐藏（默认 display:none）', html.indexOf('#wkBar { display: none; }') !== -1);
+check('周切换栏横屏显示且在 landscape 块内', !!lm && lm[0].indexOf('#wkBar { display: flex') !== -1);
+check('周切换栏深色模式适配', html.indexOf('#wkBar .wkNavBtn { border-color: #262b36; }') !== -1);
+check('周切换控件已注册进 page-harness ids（桩可寻址）', ['wkBar', 'wkPrev', 'wkNext', 'wkLabel', 'wkNowBtn'].every((id) => harnessSrc.indexOf("'" + id + "'") !== -1));
 
 // ---------- 2) renderWeek 行为（合成周事件，含跨午夜与重叠） ----------
 const pad = (n) => String(n).padStart(2, '0');
@@ -165,6 +173,74 @@ if (existsSync(new URL('../schedule.json', import.meta.url))) {
 } else {
   console.log('  [SKIP] schedule.json 不存在（真实数据冒烟跳过）');
 }
+
+console.log('4) 横屏周切换（‹ / › / 回到本周 / 日期变更归零）');
+// 注意：每次 render 会 grid.innerHTML='' 重建全部节点，必须现取现用（不得复用第 2 节捕获的 cols）
+const headNow = () => collect(grid, isWkDay);
+const colsNow = () => collect(grid, isGrid);
+const blocksNow = (i) => collect(colsNow()[i], isBlock);
+const dueNow = () => collect(grid, (el) => el.classList && el.classList.contains('wkDue'));
+const listCount = () => collect(page.byId.list, (el) => el.className === 'it').length;
+const sunOf = (m) => new Date(m.getFullYear(), m.getMonth(), m.getDate() + 6);
+
+check('初始标签「本周 · 周一–周日区间」且「本周」按钮禁用', (() => {
+  const t = page.byId.wkLabel.textContent;
+  return t.indexOf('本周') !== -1 &&
+    t.indexOf(mon.getMonth() + 1 + '/' + mon.getDate()) !== -1 &&
+    t.indexOf(sunOf(mon).getMonth() + 1 + '/' + sunOf(mon).getDate()) !== -1 &&
+    page.byId.wkNowBtn.disabled === true;
+})());
+
+const lc0 = listCount();
+page.byId.wkPrev.onclick(); // ‹ → 上一周
+check('‹ 后标签「上周」、表头为上周一–上周日', (() => {
+  const prev = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() - 7);
+  const t = page.byId.wkLabel.textContent, hd = headNow();
+  return t.indexOf('上周') !== -1 &&
+    hd[0].textContent.indexOf(prev.getMonth() + 1 + '/' + prev.getDate()) !== -1 &&
+    hd[6].textContent.indexOf(sunOf(prev).getMonth() + 1 + '/' + sunOf(prev).getDate()) !== -1;
+})());
+check('切离当前周：今日列高亮/时刻线/红点全部消失、「本周」按钮解禁', (() => {
+  return headNow().every((c) => !c.classList.contains('today')) &&
+    collect(grid, (el) => el.classList && (el.classList.contains('wkNow') || el.classList.contains('wkNowDot'))).length === 0 &&
+    page.byId.wkNowBtn.disabled === false;
+})());
+check('上周内容：weekly 课/跨午夜（续）仍在；skip 仅钉具体日期，上周一停调课恢复', (() => {
+  const txt = collect(grid, isBlock).map((b) => b.textContent).join('|');
+  return txt.indexOf('周一早课') !== -1 && txt.indexOf('跨午夜课') !== -1 &&
+    txt.indexOf('（续）') !== -1 && txt.indexOf('停调课') !== -1;
+})());
+check('上周内容：一次性考试与截止横幅不出现；块数恰 6（周一3+周二续1+周三2）', (() => {
+  const txt = collect(grid, isBlock).map((b) => b.textContent).join('|');
+  return txt.indexOf('周五考试') === -1 && dueNow().length === 0 && collect(grid, isBlock).length === 6;
+})());
+check('周切换不影响竖屏单日列表（仍按所选日期渲染）', listCount() === lc0);
+
+page.byId.wkNext.onclick();
+page.byId.wkNext.onclick(); // 上周基础上 ›› → 回到下周（-1+2=+1）
+check('‹ 后 ›› → 标签「下周」、表头为下周（混合导航偏移连续）', (() => {
+  const m1 = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 7);
+  return page.byId.wkLabel.textContent.indexOf('下周') !== -1 &&
+    headNow()[0].textContent.indexOf(m1.getMonth() + 1 + '/' + m1.getDate()) !== -1;
+})());
+
+page.byId.wkNowBtn.onclick(); // 先复位，再连续 ›› 验证多周相对命名
+page.byId.wkNext.onclick();
+page.byId.wkNext.onclick(); // ›› → 后两周
+check('复位后 ›› 标签「后 2 周」、表头再进两周', (() => {
+  const m2 = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 14);
+  return page.byId.wkLabel.textContent.indexOf('后 2 周') !== -1 &&
+    headNow()[0].textContent.indexOf(m2.getMonth() + 1 + '/' + m2.getDate()) !== -1;
+})());
+
+page.byId.wkNowBtn.onclick(); // 回到本周
+check('「本周」复位：标签回本周、日期选择回今天', page.byId.wkLabel.textContent.indexOf('本周') !== -1 && page.byId.datePick.value === fmt(today));
+check('「本周」复位：今日列高亮/考试/截止横幅全部回归', headNow()[todayIdx].classList.contains('today') &&
+  blocksNow(4).some((b) => b.textContent.indexOf('周五考试') !== -1) && dueNow().length === 1);
+
+page.byId.wkPrev.onclick(); // 切到上周后再变更日期：偏移应归零跟随所选日期
+if (page.byId.datePick._ls && page.byId.datePick._ls.change) page.byId.datePick._ls.change();
+check('日期选择变更：周偏移归零（标签回本周）', page.byId.wkLabel.textContent.indexOf('本周') !== -1);
 
 console.log(`\n横屏周视图\n  通过 ${pass} / 失败 ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

@@ -397,18 +397,39 @@
     }
     function wkMin(m) { return pad(Math.floor(m / 60)) + ':' + pad(m % 60); }
 
+    // 周切换状态：0 = 锚点周（选中日期所在周），±N = 相对锚点前/后 N 周。
+    // 日期选择变更时归零（视图跟随所选日期）；‹/› 增减；「本周」回到今天所在周并复位。
+    var wkOffset = 0;
+
+    /** 周切换栏（#wkBar，仅横屏显示）：标签 = 相对周名 + 周区间；已在当前周时「本周」按钮禁用。 */
+    function updateWkBar(mon, days) {
+      var lbl = $('wkLabel'), btnT = $('wkNowBtn');
+      if (!lbl || !btnT) return;
+      var range = (mon.getMonth() + 1) + '/' + mon.getDate() + '–' +
+        (days[6].getMonth() + 1) + '/' + days[6].getDate();
+      var diffW = Math.round((mon - TTOccur.mondayOf(new Date())) / 604800000); // 整周差（round 消除跨时区/夏令时的钟差）
+      var rel = diffW === 0 ? '本周'
+        : diffW === -1 ? '上周'
+        : diffW === 1 ? '下周'
+        : (diffW < 0 ? '前 ' + (-diffW) + ' 周' : '后 ' + diffW + ' 周');
+      lbl.textContent = rel + ' · ' + range;
+      btnT.disabled = diffW === 0;
+    }
+
     function renderWeek(day) {
       var grid = $('weekGrid');
       if (!grid) return; // 桩/旧壳无容器时静默跳过（竖屏也永不显示）
       grid.innerHTML = '';
-      if (!data || !Array.isArray(data.events)) return;
       var mon = TTOccur.mondayOf(day);
+      mon = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + wkOffset * 7); // 周切换：视图锚定偏移后的周一
       var todayStr = fmtDate(new Date());
       var days = [], rawDays = [];
       for (var i = 0; i < 7; i++) {
         days.push(new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i));
         rawDays.push([]);
       }
+      updateWkBar(mon, days); // 标签/按钮状态始终跟随当前视图（数据未就绪时也更新）
+      if (!data || !Array.isArray(data.events)) return;
       var tasks = [];
       data.events.forEach(function (ev) {
         if ((ev.type || 'once') === 'task') { if (ev.deadline) tasks.push(ev); return; }
@@ -448,6 +469,7 @@
       var pxPerMin = PX_PER_HOUR / 60;
       var H = Math.round((rEnd - rStart) * pxPerMin);
       var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+      var viewNow = todayStr >= fmtDate(days[0]) && todayStr <= fmtDate(days[6]); // 正在看今天所在周（切走后不画时刻线/红点）
 
       var mk = function (cls) { var d = document.createElement('div'); d.className = cls; return d; };
 
@@ -469,7 +491,7 @@
         lbl.textContent = wkMin(t);
         gutter.appendChild(lbl);
       }
-      if (nowMin >= rStart && nowMin <= rEnd) {
+      if (viewNow && nowMin >= rStart && nowMin <= rEnd) {
         var nd = mk('wkNowDot');
         nd.style.top = ((nowMin - rStart) * pxPerMin) + 'px';
         nd.textContent = wkMin(nowMin);
@@ -722,7 +744,15 @@
       };
     }
 
-    $('datePick').addEventListener('change', render);
+    // 日期选择变更：视图跟随所选日期（周偏移归零）；横屏周切换按钮（仅横屏显示，竖屏点了也无副作用）
+    $('datePick').addEventListener('change', function () { wkOffset = 0; render(); });
+    $('wkPrev').onclick = function () { wkOffset--; render(); };
+    $('wkNext').onclick = function () { wkOffset++; render(); };
+    $('wkNowBtn').onclick = function () { // 回到今天所在周：复位偏移 + 单日视图也切回今天
+      wkOffset = 0;
+      $('datePick').value = fmtDate(new Date());
+      render();
+    };
 
     // ---------- 提醒：事件开始前 N 分钟弹窗（N = 事件 remindLead，默认 20 分钟；0 = 不提醒） ----------
     // 事件对象：schedule.json 的日程（weekly/once/custom），字段为本地日期 + start(HH:MM)。
