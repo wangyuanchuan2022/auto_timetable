@@ -370,64 +370,153 @@
     }
     function isToday(d) { return fmtDate(d) === fmtDate(new Date()); }
 
-    // ---------- 横屏周视图：手机横屏时以 7 列展示全周（显隐纯 CSS，见 mobile.html @media (orientation: landscape)） ----------
-    // 列 = 周一..周日（meta.weekStart=1）；列内为该日有起止时刻的日程（复用 dayEvents → occur.js 单一实现）；
-    // 长周期任务只在「截止日」列出红色 chip（其余列不重复展示，与桌面周视图「截止任务侧栏」语义一致）；
-    // 点击 chip 与竖屏同一对话框（openDialog）；数据刷新走 render() 同一入口（load / 5 分钟轮询 / 回前台）。
-    function wkChip(ev, timeText, cls) {
-      var c = document.createElement('div');
-      c.className = 'wkChip' + (cls ? ' ' + cls : '');
-      c.style.borderLeftColor = ev.color || ((ev.type || 'once') === 'task' ? '#f85149' : '#4f8ef7');
-      var t = document.createElement('div');
-      t.className = 't';
-      t.textContent = timeText;
-      c.appendChild(t);
-      var n = document.createElement('div');
-      n.className = 'n';
-      n.textContent = ev.title || '(未命名)';
-      c.appendChild(n);
-      c.onclick = function () { openDialog(ev); };
-      return c;
+    // ---------- 横屏周视图：与电脑端（schedule.html）同语义的时间网格 ----------
+    // 显隐纯 CSS（mobile.html @media orientation:landscape）；内容随 render() 刷新
+    // （load / 5 分钟轮询 / 回前台）。语义对齐桌面：跨午夜事件拆「当天段+次日续段（周一
+    // 补上周日续段）」、重叠自动分列（layoutDay 贪心）、时间范围 meta.timeStart/timeEnd
+    // 优先否则动态（min-60 ~ max+60，15 分钟取整，空表 08:00-20:00）、截止任务当日列顶
+    // 红横幅、今日列当前时刻红线。事件发生判定复用 occursOn（occur.js 单一实现）。
+    function wkHexToRgba(hex, a) {
+      var h = String(hex || '').replace('#', '');
+      if (h.length === 3) h = h.split('').map(function (c) { return c + c; }).join('');
+      if (h.length !== 6) return 'rgba(79,142,247,' + a + ')';
+      return 'rgba(' + parseInt(h.slice(0, 2), 16) + ',' + parseInt(h.slice(2, 4), 16) + ',' + parseInt(h.slice(4, 6), 16) + ',' + a + ')';
     }
+    function wkLayoutDay(segs) { // 与桌面 layoutDay 同语义：按开始排序，贪心找空闲列
+      var arr = segs.map(function (g) {
+        return Object.assign({}, g.ref, { _start: g.s, _end: g.e, _cont: !!g.cont, _ref: g.ref });
+      }).sort(function (a, b) { return a._start - b._start; });
+      var lanes = [];
+      arr.forEach(function (e) {
+        var lane = -1;
+        for (var i = 0; i < lanes.length; i++) { if (lanes[i] <= e._start) { lane = i; break; } }
+        if (lane === -1) { lane = lanes.length; lanes.push(e._end); } else { lanes[lane] = e._end; }
+        e._lane = lane;
+      });
+      return { list: arr, lanes: lanes.length };
+    }
+    function wkMin(m) { return pad(Math.floor(m / 60)) + ':' + pad(m % 60); }
 
     function renderWeek(day) {
       var grid = $('weekGrid');
       if (!grid) return; // 桩/旧壳无容器时静默跳过（竖屏也永不显示）
       grid.innerHTML = '';
+      if (!data || !Array.isArray(data.events)) return;
       var mon = TTOccur.mondayOf(day);
       var todayStr = fmtDate(new Date());
-      var cols = document.createElement('div');
-      cols.className = 'wkCols';
+      var days = [], rawDays = [];
       for (var i = 0; i < 7; i++) {
-        var d = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i);
-        var ds = fmtDate(d);
-        var col = document.createElement('div');
-        col.className = 'wkCol' + (ds === todayStr ? ' today' : '');
-        var hd = document.createElement('div');
-        hd.className = 'wkDay';
-        hd.textContent = DAY_FULL[i] + ' ' + (d.getMonth() + 1) + '/' + d.getDate();
-        col.appendChild(hd);
-        var evs = dayEvents(d);
-        var tasks = [];
-        evs.forEach(function (ev) {
-          if ((ev.type || 'once') === 'task') {
-            if (ev.deadline === ds) tasks.push(ev); // 仅截止日列展示，避免每日重复
-            return;
-          }
-          col.appendChild(wkChip(ev, (ev.start || '') + (ev.end ? '–' + ev.end : '')));
-        });
-        tasks.forEach(function (ev) {
-          col.appendChild(wkChip(ev, '任务截止', 'wkTask'));
-        });
-        if (col.children.length === 1) { // 只有表头 = 该日无日程 → 占位保持七列节奏
-          var empty = document.createElement('div');
-          empty.className = 'wkEmpty';
-          empty.textContent = '—';
-          col.appendChild(empty);
-        }
-        cols.appendChild(col);
+        days.push(new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i));
+        rawDays.push([]);
       }
-      grid.appendChild(cols);
+      var tasks = [];
+      data.events.forEach(function (ev) {
+        if ((ev.type || 'once') === 'task') { if (ev.deadline) tasks.push(ev); return; }
+        days.forEach(function (d, idx) {
+          if (!occursOn(ev, d)) return;
+          var s = toMin(ev.start), e = toMin(ev.end);
+          if (e <= s) { // 跨午夜：当天段到 24:00 + 次日续段（与桌面同语义）
+            rawDays[idx].push({ ref: ev, s: s, e: 1440 });
+            if (idx < 6) rawDays[idx + 1].push({ ref: ev, s: 0, e: e, cont: true });
+          } else rawDays[idx].push({ ref: ev, s: s, e: e });
+        });
+      });
+      (function () { // 周一补上来自上周日跨午夜事件的续段（只针对有时刻的日程；task 无时刻语义必须排除，
+        // 否则 occursOn 在 [start,deadline] 全窗为真 + toMin(end)<=toMin(start) 恒真，会把截止任务泄成 0 高度续段）
+        var prev = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() - 1);
+        data.events.forEach(function (ev) {
+          if ((ev.type || 'once') === 'task') return;
+          if (occursOn(ev, prev) && toMin(ev.end) <= toMin(ev.start)) rawDays[0].push({ ref: ev, s: 0, e: toMin(ev.end), cont: true });
+        });
+      })();
+      tasks.sort(function (a, b) { return a.deadline < b.deadline ? -1 : a.deadline > b.deadline ? 1 : 0; }); // 桌面同语义：按截止升序
+      var perDay = rawDays.map(wkLayoutDay);
+      var allVisible = [];
+      perDay.forEach(function (p) { allVisible = allVisible.concat(p.list); });
+
+      // 时间范围：meta.timeStart/timeEnd 优先，否则动态（同桌面 auto 规则）
+      var rStart, rEnd;
+      var ms = data.meta && data.meta.timeStart, me = data.meta && data.meta.timeEnd;
+      if (ms && me) { rStart = toMin(ms); rEnd = toMin(me); }
+      else if (allVisible.length) {
+        var mn = Infinity, mx = -Infinity;
+        allVisible.forEach(function (e) { if (e._start < mn) mn = e._start; if (e._end > mx) mx = e._end; });
+        mn = Math.max(0, mn - 60); mx = Math.min(1440, mx + 60);
+        rStart = Math.floor(mn / 15) * 15; rEnd = Math.ceil(mx / 15) * 15;
+      } else { rStart = 480; rEnd = 1200; }
+      var PX_PER_HOUR = 36; // 横屏紧凑档（桌面 48）；与 mobile.html 周视图网格线 36px 同步改
+      var pxPerMin = PX_PER_HOUR / 60;
+      var H = Math.round((rEnd - rStart) * pxPerMin);
+      var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+
+      var mk = function (cls) { var d = document.createElement('div'); d.className = cls; return d; };
+
+      var head = mk('wkHead');
+      head.appendChild(mk('wkCorner'));
+      days.forEach(function (d, i) {
+        var hd = mk('wkDay' + (fmtDate(d) === todayStr ? ' today' : ''));
+        hd.textContent = DAY_FULL[i] + ' ' + (d.getMonth() + 1) + '/' + d.getDate();
+        head.appendChild(hd);
+      });
+      grid.appendChild(head);
+
+      var body = mk('wkBody');
+      var gutter = mk('wkGutter');
+      gutter.style.height = H + 'px';
+      for (var t = Math.ceil(rStart / 60) * 60; t < rEnd; t += 60) {
+        var lbl = mk('wkHour');
+        lbl.style.top = ((t - rStart) * pxPerMin) + 'px';
+        lbl.textContent = wkMin(t);
+        gutter.appendChild(lbl);
+      }
+      if (nowMin >= rStart && nowMin <= rEnd) {
+        var nd = mk('wkNowDot');
+        nd.style.top = ((nowMin - rStart) * pxPerMin) + 'px';
+        nd.textContent = wkMin(nowMin);
+        gutter.appendChild(nd);
+      }
+      body.appendChild(gutter);
+
+      days.forEach(function (d, idx) {
+        var cell = mk('wkDayGrid' + (fmtDate(d) === todayStr ? ' today' : ''));
+        cell.style.height = H + 'px';
+        perDay[idx].list.forEach(function (e) {
+          var b = mk('wkBlock');
+          var color = e.color || '#4f8ef7';
+          b.style.top = ((e._start - rStart) * pxPerMin) + 'px';
+          b.style.height = Math.max(8, (e._end - e._start) * pxPerMin - 2) + 'px';
+          b.style.left = (e._lane * (100 / perDay[idx].lanes)) + '%';
+          b.style.width = (100 / perDay[idx].lanes) + '%';
+          b.style.background = wkHexToRgba(color, 0.16);
+          b.style.borderLeftColor = color;
+          var ti = mk('wkBlockTitle');
+          ti.textContent = (e.title || '(未命名)') + (e._cont ? '（续）' : '');
+          ti.style.color = color;
+          b.appendChild(ti);
+          var bh = parseFloat(b.style.height);
+          if (bh >= 24) { var tm = mk('wkBlockTime'); tm.textContent = wkMin(e._start) + '–' + wkMin(e._end); b.appendChild(tm); }
+          if (e.location && bh >= 40) { var lo = mk('wkBlockLoc'); lo.textContent = e.location; b.appendChild(lo); }
+          b.onclick = (function (ref) { return function () { openDialog(ref); }; })(e._ref);
+          cell.appendChild(b);
+        });
+        var bi = 0;
+        tasks.forEach(function (tk) { // 截止任务：当日列顶红横幅（与桌面同语义）
+          if (tk.deadline !== fmtDate(d)) return;
+          var bn = mk('wkDue');
+          bn.style.top = (2 + bi * 20) + 'px';
+          bn.textContent = '⏰ ' + (tk.title || '(未命名)');
+          bn.onclick = (function (ref) { return function () { openDialog(ref); }; })(tk);
+          cell.appendChild(bn);
+          bi++;
+        });
+        if (fmtDate(d) === todayStr && nowMin >= rStart && nowMin <= rEnd) {
+          var nl = mk('wkNow');
+          nl.style.top = ((nowMin - rStart) * pxPerMin) + 'px';
+          cell.appendChild(nl);
+        }
+        body.appendChild(cell);
+      });
+      grid.appendChild(body);
     }
 
     // ---------- 对话框：查看并修改该条日程 ----------

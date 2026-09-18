@@ -202,39 +202,48 @@
     }
     .chatHint { font-size: 11.5px; color: #6b7280; margin-top: 6px; }
 
-    /* ===== 横屏周视图：横屏时以 7 列展示全周日程（显隐纯 CSS，内容由 renderWeek 填充） ===== */
+    /* ===== 横屏周视图：与电脑端同语义的时间网格（7 列 + 时间轴 + 跨午夜拆段 + 重叠分列） =====
+       注：网格线间距 36px 与 mobile-app.js renderWeek 的 PX_PER_HOUR=36 同步改。 */
     #weekGrid { display: none; }
-    .wkCols { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; align-items: stretch; }
-    .wkCol { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+    .wkHead { display: grid; grid-template-columns: 34px repeat(7, 1fr); gap: 3px; margin-bottom: 4px; }
     .wkDay {
-      font-size: 11px; font-weight: 600; text-align: center; padding: 4px 0;
+      font-size: 10.5px; font-weight: 600; text-align: center; padding: 4px 0;
       border-radius: 6px; background: rgba(128,128,128,.12); white-space: nowrap;
     }
-    .wkCol.today .wkDay { background: #4f6ef7; color: #fff; }
-    .wkChip {
-      border: 1px solid #e5e7eb; border-left-width: 3px; border-radius: 6px; background: #fff;
-      padding: 3px 5px; cursor: pointer; min-width: 0;
+    .wkDay.today { background: #4f6ef7; color: #fff; }
+    .wkBody { display: grid; grid-template-columns: 34px repeat(7, 1fr); gap: 3px; }
+    .wkGutter, .wkDayGrid { position: relative; min-width: 0; }
+    .wkGutter { font-size: 9px; color: #6b7280; }
+    .wkHour { position: absolute; right: 3px; transform: translateY(-50%); line-height: 1; }
+    .wkNowDot { position: absolute; right: 1px; transform: translateY(-50%); color: #f85149; font-weight: 700; line-height: 1; }
+    .wkDayGrid { border-left: 1px solid rgba(128,128,128,.15); background-image: repeating-linear-gradient(to bottom, rgba(128,128,128,.16) 0 1px, transparent 1px 36px); }
+    .wkDayGrid.today { background-color: rgba(79,110,247,.05); }
+    .wkBlock {
+      position: absolute; overflow: hidden; border-radius: 5px; box-sizing: border-box;
+      border: 1px solid rgba(128,128,128,.28); border-left-width: 3px;
+      padding: 1px 3px; cursor: pointer; z-index: 2;
     }
-    .wkChip:active { opacity: .7; }
-    .wkChip .t { font-size: 10px; font-weight: 600; color: #6b7280; line-height: 1.3; }
-    .wkChip .n {
-      font-size: 11px; font-weight: 600; line-height: 1.35; word-break: break-all;
-      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    .wkBlock:active { opacity: .75; }
+    .wkBlockTitle { font-size: 10px; font-weight: 700; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wkBlockTime { font-size: 9px; color: #6b7280; line-height: 1.2; }
+    .wkBlockLoc { font-size: 9px; color: #6b7280; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wkDue {
+      position: absolute; left: 1px; right: 1px; z-index: 5; border-radius: 5px; cursor: pointer;
+      background: #f85149; color: #fff; font-size: 9.5px; font-weight: 700; line-height: 1.6;
+      padding: 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .wkChip.wkTask { border-color: #f85149; background: rgba(248,81,73,.06); }
-    .wkChip.wkTask .t, .wkChip.wkTask .n { color: #f85149; }
-    .wkEmpty { font-size: 10px; color: #6b7280; text-align: center; padding: 8px 0; }
+    .wkNow { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid #f85149; z-index: 4; }
     @media (orientation: landscape) {
       .pageSched .wrap { max-width: none; padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
       .pageSched .head input[type="date"], .pageSched #notifyRow, .pageSched #list { display: none; }
       .pageSched #weekGrid { display: block; }
-      .pageSched .wkCols { align-items: start; max-height: calc(100vh - 120px); overflow-y: auto; }
+      .pageSched #weekGrid .wkBody { max-height: calc(100vh - 130px); overflow-y: auto; }
     }
     @media (prefers-color-scheme: dark) {
       .wkDay { background: rgba(128,128,128,.18); }
-      .wkChip { background: rgba(255,255,255,.03); border-color: #262b36; }
-      .wkChip .n { color: #e6e8eb; }
-      .wkChip.wkTask { background: rgba(248,81,73,.12); border-color: #f85149; }
+      .wkDayGrid { border-left-color: rgba(128,128,128,.22); background-image: repeating-linear-gradient(to bottom, rgba(128,128,128,.2) 0 1px, transparent 1px 36px); }
+      .wkBlock { border-color: #262b36; }
+      .wkBlockTime, .wkBlockLoc { color: #9aa4b2; }
     }
   </style>
 </head>
