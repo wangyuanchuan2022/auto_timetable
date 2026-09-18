@@ -201,6 +201,41 @@
       border: none; background: #cf222e; color: #fff; font-size: 12px; line-height: 1; cursor: pointer;
     }
     .chatHint { font-size: 11.5px; color: #6b7280; margin-top: 6px; }
+
+    /* ===== 横屏周视图：横屏时以 7 列展示全周日程（显隐纯 CSS，内容由 renderWeek 填充） ===== */
+    #weekGrid { display: none; }
+    .wkCols { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; align-items: stretch; }
+    .wkCol { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+    .wkDay {
+      font-size: 11px; font-weight: 600; text-align: center; padding: 4px 0;
+      border-radius: 6px; background: rgba(128,128,128,.12); white-space: nowrap;
+    }
+    .wkCol.today .wkDay { background: #4f6ef7; color: #fff; }
+    .wkChip {
+      border: 1px solid #e5e7eb; border-left-width: 3px; border-radius: 6px; background: #fff;
+      padding: 3px 5px; cursor: pointer; min-width: 0;
+    }
+    .wkChip:active { opacity: .7; }
+    .wkChip .t { font-size: 10px; font-weight: 600; color: #6b7280; line-height: 1.3; }
+    .wkChip .n {
+      font-size: 11px; font-weight: 600; line-height: 1.35; word-break: break-all;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .wkChip.wkTask { border-color: #f85149; background: rgba(248,81,73,.06); }
+    .wkChip.wkTask .t, .wkChip.wkTask .n { color: #f85149; }
+    .wkEmpty { font-size: 10px; color: #6b7280; text-align: center; padding: 8px 0; }
+    @media (orientation: landscape) {
+      .pageSched .wrap { max-width: none; padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
+      .pageSched .head input[type="date"], .pageSched #notifyRow, .pageSched #list { display: none; }
+      .pageSched #weekGrid { display: block; }
+      .pageSched .wkCols { align-items: start; max-height: calc(100vh - 120px); overflow-y: auto; }
+    }
+    @media (prefers-color-scheme: dark) {
+      .wkDay { background: rgba(128,128,128,.18); }
+      .wkChip { background: rgba(255,255,255,.03); border-color: #262b36; }
+      .wkChip .n { color: #e6e8eb; }
+      .wkChip.wkTask { background: rgba(248,81,73,.12); border-color: #f85149; }
+    }
   </style>
 </head>
 <body>
@@ -211,12 +246,14 @@
         <h1>日程安排</h1>
         <input type="date" id="datePick" />
       </div>
-      <!-- 系统级通知开关：Service Worker + Web Push（后台也能收到提醒） -->
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <!-- 系统级通知开关：Service Worker + Web Push（后台也能收到提醒）；横屏周视图下隐藏 -->
+      <div id="notifyRow" style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
         <button id="notifyBtn" style="padding:6px 12px;border-radius:10px;border:1px solid #d1d5db;background:transparent;color:inherit;font:inherit;font-size:12px">🔔 开启系统通知</button>
         <span id="notifyState" style="font-size:11.5px;color:#6b7280">提醒为页面内弹窗</span>
       </div>
       <div class="loading" id="list">加载中…</div>
+      <!-- 横屏周视图容器：竖屏隐藏，横屏（orientation: landscape）替换单日列表展示全周 -->
+      <div id="weekGrid"></div>
     </div>
   </div>
 

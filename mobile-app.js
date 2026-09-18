@@ -281,6 +281,7 @@
       var pick = $('datePick');
       if (!pick.value) pick.value = fmtDate(new Date());
       var day = parseDate(pick.value);
+      renderWeek(day); // 横屏周视图：内容随数据/日期刷新（显隐由 CSS orientation 控制）
       var list = $('list');
       list.className = 'list';
       list.innerHTML = '';
@@ -368,6 +369,66 @@
       });
     }
     function isToday(d) { return fmtDate(d) === fmtDate(new Date()); }
+
+    // ---------- 横屏周视图：手机横屏时以 7 列展示全周（显隐纯 CSS，见 mobile.html @media (orientation: landscape)） ----------
+    // 列 = 周一..周日（meta.weekStart=1）；列内为该日有起止时刻的日程（复用 dayEvents → occur.js 单一实现）；
+    // 长周期任务只在「截止日」列出红色 chip（其余列不重复展示，与桌面周视图「截止任务侧栏」语义一致）；
+    // 点击 chip 与竖屏同一对话框（openDialog）；数据刷新走 render() 同一入口（load / 5 分钟轮询 / 回前台）。
+    function wkChip(ev, timeText, cls) {
+      var c = document.createElement('div');
+      c.className = 'wkChip' + (cls ? ' ' + cls : '');
+      c.style.borderLeftColor = ev.color || ((ev.type || 'once') === 'task' ? '#f85149' : '#4f8ef7');
+      var t = document.createElement('div');
+      t.className = 't';
+      t.textContent = timeText;
+      c.appendChild(t);
+      var n = document.createElement('div');
+      n.className = 'n';
+      n.textContent = ev.title || '(未命名)';
+      c.appendChild(n);
+      c.onclick = function () { openDialog(ev); };
+      return c;
+    }
+
+    function renderWeek(day) {
+      var grid = $('weekGrid');
+      if (!grid) return; // 桩/旧壳无容器时静默跳过（竖屏也永不显示）
+      grid.innerHTML = '';
+      var mon = TTOccur.mondayOf(day);
+      var todayStr = fmtDate(new Date());
+      var cols = document.createElement('div');
+      cols.className = 'wkCols';
+      for (var i = 0; i < 7; i++) {
+        var d = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i);
+        var ds = fmtDate(d);
+        var col = document.createElement('div');
+        col.className = 'wkCol' + (ds === todayStr ? ' today' : '');
+        var hd = document.createElement('div');
+        hd.className = 'wkDay';
+        hd.textContent = DAY_FULL[i] + ' ' + (d.getMonth() + 1) + '/' + d.getDate();
+        col.appendChild(hd);
+        var evs = dayEvents(d);
+        var tasks = [];
+        evs.forEach(function (ev) {
+          if ((ev.type || 'once') === 'task') {
+            if (ev.deadline === ds) tasks.push(ev); // 仅截止日列展示，避免每日重复
+            return;
+          }
+          col.appendChild(wkChip(ev, (ev.start || '') + (ev.end ? '–' + ev.end : '')));
+        });
+        tasks.forEach(function (ev) {
+          col.appendChild(wkChip(ev, '任务截止', 'wkTask'));
+        });
+        if (col.children.length === 1) { // 只有表头 = 该日无日程 → 占位保持七列节奏
+          var empty = document.createElement('div');
+          empty.className = 'wkEmpty';
+          empty.textContent = '—';
+          col.appendChild(empty);
+        }
+        cols.appendChild(col);
+      }
+      grid.appendChild(cols);
+    }
 
     // ---------- 对话框：查看并修改该条日程 ----------
     function openDialog(ev) {

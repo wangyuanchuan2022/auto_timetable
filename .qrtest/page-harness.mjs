@@ -146,7 +146,7 @@ export function loadPage(pagePath, opts = {}) {
   try { occurSrc = readFileSync(new URL('../occur.js', import.meta.url), 'utf8'); } catch (e) {}
 
   const ids = ['pageSched', 'pageChat', 'tabSched', 'tabChat', 'chatDot',
-    'datePick', 'list', 'notifyBtn', 'notifyState', 'chatLog', 'chatThumbs', 'chatIn', 'chatAttach', 'chatSend', 'chatFile', 'modelBtn', 'newChatBtn', 'dDel', 'pIn', 'pOk', 'pCancel', 'pMsg', 'dWeekPattern', 'dWeekPatternWrap', 'dSkip', 'dTaskStart', 'dTaskStartWrap'];
+    'datePick', 'list', 'notifyRow', 'weekGrid', 'notifyBtn', 'notifyState', 'chatLog', 'chatThumbs', 'chatIn', 'chatAttach', 'chatSend', 'chatFile', 'modelBtn', 'newChatBtn', 'dDel', 'pIn', 'pOk', 'pCancel', 'pMsg', 'dWeekPattern', 'dWeekPatternWrap', 'dSkip', 'dTaskStart', 'dTaskStartWrap'];
   const byId = {}; ids.forEach(id => { byId[id] = makeEl('div'); });
 
   // localStorage 桩：可预置初始值（opts.store，测「重开恢复上次页签」），并记录写入供断言
