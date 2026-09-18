@@ -155,6 +155,29 @@ fixtures([{ id: 'seed-weekly', title: '种子课', type: 'weekly', weekday: 3, s
 check('resolve-date 多表达逐个换算', (() => { const r = run(['resolve-date', '今天', '下周三']); return r.length === 2 && r[0].date === '2026-09-18' && r[1].weekdayName === '周三'; })());
 check('describe 展示 weekly 停课/单双周标记', describe({ id: 'd', title: 'T', type: 'weekly', weekday: 1, start: '08:00', end: '09:35', skip: ['2026-10-05'], weekPattern: { start: '2026-09-14', odd: true } }).includes('[停课×1]') && describe({ id: 'd', title: 'T', type: 'weekly', weekday: 1, start: '08:00', end: '09:35', weekPattern: { start: '2026-09-14', odd: true } }).includes('[单周]'));
 
+// ---------- 5) CLI 子命令路径（today/list/show）与 add 路径错误分支 ----------
+console.log('5) today/list/show 与 add 错误分支');
+fixtures([{ id: 'seed-weekly', title: '种子课', type: 'weekly', weekday: 3, start: '08:00', end: '09:35', deadline: '2027-01-17' }]);
+run(['add', 'once', '--file', FIXTURE, '--id', 'obs-color', '--title', '带色事件', '--date', '明天', '--start', '08:00', '--end', '09:00', '--color', '#4F8EF7', '--skip', '9月20日,9月20日']);
+const colored = JSON.parse(readFileSync(FIXTURE, 'utf8')).events.find((e) => e.id === 'obs-color');
+check('合法 color 归一小写落盘', colored.color === '#4f8ef7');
+check('add --skip 去重排序落盘', JSON.stringify(colored.skip) === JSON.stringify(['2026-09-20']));
+const td = run(['today']);
+check('today 输出日期/星期结构', /^\d{4}-\d{2}-\d{2}$/.test(td.date) && td.weekday >= 1 && td.weekday <= 7 && !!td.weekdayName);
+check('list 全量返回数组', run(['list', '--file', FIXTURE]).length === 2);
+check('list --type 过滤', run(['list', '--type', 'once', '--file', FIXTURE]).every((e) => (e.type || 'once') === 'once'));
+check('list --type 非法报错', throws(() => run(['list', '--type', 'bogus', '--file', FIXTURE]), '--type'));
+check('list --q 过滤命中标题', run(['list', '--q', '种子', '--file', FIXTURE]).length === 1);
+const shown = run(['show', 'seed-weekly', '--file', FIXTURE]);
+check('show 按 id 命中并带 human 文本', shown.ev.id === 'seed-weekly' && shown.human.includes('seed-weekly'));
+check('show 缺参报错', throws(() => run(['show', '--file', FIXTURE]), '用法'));
+check('show 找不到报错', throws(() => run(['show', '查无此课', '--file', FIXTURE]), '找不到'));
+check('add 缺类型报错（用法提示）', throws(() => run(['add', '--file', FIXTURE, '--title', 'x']), '用法'));
+check('add weekly --weekpattern 缺 --wp-start 报错', throws(() => run(['add', 'weekly', '--file', FIXTURE, '--title', 'x', '--weekday', '1', '--start', '08:00', '--end', '09:00', '--weekpattern', 'odd']), '--wp-start'));
+check('add weekly --weekpattern 非法值报错', throws(() => run(['add', 'weekly', '--file', FIXTURE, '--title', 'x', '--weekday', '1', '--start', '08:00', '--end', '09:00', '--weekpattern', 'weird', '--wp-start', '明天']), 'odd'));
+check('add 成功路径 weekPattern 落盘', (() => { run(['add', 'weekly', '--file', FIXTURE, '--id', 'obs-wp', '--title', '单双周课', '--weekday', '2', '--start', '08:00', '--end', '09:00', '--weekpattern', 'even', '--wp-start', '9月14日']); return JSON.parse(readFileSync(FIXTURE, 'utf8')).events.find((e) => e.id === 'obs-wp').weekPattern.odd === false; })());
+check('add custom --days 用于 unit=day 报错', throws(() => run(['add', 'custom', '--file', FIXTURE, '--title', 'x', '--interval', '1', '--unit', 'day', '--repeat-start', '明天', '--days', '1', '--start', '08:00', '--end', '09:00']), '--days'));
+
 rmSync(TMP, { recursive: true, force: true });
 console.log(`\ntt.mjs 工具\n  通过 ${pass} / 失败 ${fail}`);
 process.exit(fail === 0 ? 0 : 1);
