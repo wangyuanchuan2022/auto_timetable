@@ -3,7 +3,7 @@
 // 设定只能内联首条用户消息，镜像回手机前必须剥掉设定前缀）。
 // 覆盖：parseInstruction 章节锚定与四种格式错误、真实 TTPROMPT.md 内容完整性、
 //       注入/剥离 round-trip、旧格式兼容、幂等。
-import { loadInstruction, parseInstruction, withSetup, stripSetup, hasSetup, isHostInjection, SETUP_SEP } from '../chat-setup.mjs';
+import { loadInstruction, parseInstruction, withSetup, stripSetup, hasSetup, isHostInjection, SETUP_SEP, shouldReinjectSetup, injectDecision, REINJECT_EVERY_DEFAULT } from '../chat-setup.mjs';
 
 let pass = 0, fail = 0;
 const check = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name); } };
@@ -44,6 +44,9 @@ console.log('2) 真实 TTPROMPT.md（loadInstruction：运行时唯一来源）'
 const inst = loadInstruction();
 check('非空且以角色声明开头', inst.indexOf('你是') === 0 && inst.length > 100);
 check('指向 schedule.json 与最小改动纪律', inst.indexOf('schedule.json') > -1 && inst.indexOf('最小改动') > -1 && inst.indexOf('合法 JSON') > -1);
+check('工具纪律（tt.mjs 子命令 + 禁止手改 + 日期不经心算）',
+  ['tt.mjs', 'today', 'resolve-date', 'list', 'show', 'add', 'edit', 'remove', 'validate'].every(k => inst.indexOf(k) > -1)
+  && inst.indexOf('严禁直接用文件编辑方式改') > -1 && inst.indexOf('不许自己推算') > -1);
 check('事件字段规范齐全（id/title/起止/地点/颜色/备注/提醒）',
   ['id', 'title', 'start', 'end', 'location', 'color', 'note', 'remindLead'].every(k => inst.indexOf(k) > -1));
 check('三种类型与关键字段（weekly+weekday / once+date / custom+repeat）',
@@ -80,6 +83,19 @@ check('hasSetup：旧格式为真', hasSetup(oldFmt) === true);
 check('hasSetup：普通消息为假', hasSetup('吃鸡') === false);
 check('hasSetup：宿主快照正文含完整分隔标记序列时也会命中（所以必须先过 isHostInjection 再判 hasSetup）',
   hasSetup('Current runtime context.……\n\n' + SETUP_SEP + '……正文片段') === true);
+
+console.log('5) 定期重注入判定（shouldReinjectSetup / injectDecision，防长对话遗忘）');
+check('缺省间隔 = 5', REINJECT_EVERY_DEFAULT === 5);
+check('count=0 恒 false（首条由 chatInited 驱动，不重复注入）', shouldReinjectSetup(0, 5) === false);
+check('1-4 不注入、5/10 注入', [1, 2, 3, 4].every(c => shouldReinjectSetup(c, 5) === false) && shouldReinjectSetup(5, 5) === true && shouldReinjectSetup(10, 5) === true);
+check('everyN=0/负数/非整数视为关闭', shouldReinjectSetup(5, 0) === false && shouldReinjectSetup(5, -1) === false && shouldReinjectSetup(5, 2.5) === false);
+check('非整数 count 不注入', shouldReinjectSetup(2.5, 5) === false);
+check('everyN 缺省取 5', shouldReinjectSetup(5) === true && shouldReinjectSetup(4) === false);
+check('injectDecision：新会话首条 first 优先（即使 count 恰在周期上）', injectDecision(false, 5, 5).reason === 'first' && injectDecision(false, 5, 5).inject === true);
+check('injectDecision：第 5 条 periodic', injectDecision(true, 5, 5).inject === true && injectDecision(true, 5, 5).reason === 'periodic');
+check('injectDecision：其余 none', injectDecision(true, 0, 5).inject === false && injectDecision(true, 3, 5).inject === false && injectDecision(true, 6, 5).inject === false);
+check('injectDecision：everyN=0 全程关闭（首条除外）', injectDecision(true, 5, 0).inject === false);
+check('重注入与首条同构：withSetup 产物可被 stripSetup 还原', stripSetup(withSetup('第5条消息')) === '第5条消息');
 
 console.log(`\nchat-setup.mjs + TTPROMPT.md\n  通过 ${pass} / 失败 ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

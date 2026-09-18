@@ -34,3 +34,6 @@ schedule.json
 
 # 会话摘要审查临时目录（含真实日程/姓名等隐私，用完即删，切勿提交）
 .tmp-dsh-review/
+
+# 宿主预设压缩阈值补丁工作区（含用户私有预设备份与本机绝对路径，只留本地）
+.tools-backup-compaction/

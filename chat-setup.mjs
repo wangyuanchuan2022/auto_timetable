@@ -93,6 +93,32 @@ export function stripSetup(text) {
   return s;
 }
 
+// ---------- 定期重注入（防长对话遗忘：设定只在首条注入，几十轮后模型会漂移） ----------
+/** 缺省重注入间隔：每 5 条用户消息把系统设定重新包进一次
+ *  （可用 settings.chatReinjectEvery 覆盖；0 / 负数 = 关闭）。 */
+export const REINJECT_EVERY_DEFAULT = 5;
+
+/** 判定本条用户消息是否应重注入系统设定（纯函数，供单测）。
+ *  count = 本会话已成功发送的用户消息条数（不含本条）；首条注入由 chatInited=false
+ *  单独驱动，不计入本判定（count<=0 恒 false）；everyN 非正整数视为关闭。 */
+export function shouldReinjectSetup(count, everyN = REINJECT_EVERY_DEFAULT) {
+  const n = Number(everyN);
+  const c = Number(count);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  if (!Number.isInteger(c) || c <= 0) return false;
+  return c % n === 0;
+}
+
+/** chatOnce 的注入决策（纯函数，供单测）：新会话首条强制注入；之后每 N 条重注入一次。
+ *  重注入与首条注入同构（withSetup 包裹），镜像回手机时 stripSetup 剥掉前缀、
+ *  injected 标记照常驱动「已注入系统提示词」提示，用户正文正常显示。 */
+export function injectDecision(inited, count, everyN = REINJECT_EVERY_DEFAULT) {
+  if (!inited) return { inject: true, reason: 'first' };
+  return shouldReinjectSetup(count, everyN)
+    ? { inject: true, reason: 'periodic' }
+    : { inject: false, reason: 'none' };
+}
+
 /** 是否首条注入消息（设定 + 分隔标记 + 用户正文）。⚠️ 必须先过 isHostInjection：
  *  宿主运行时快照正文可能引用分隔标记常量（项目 key 记忆含原文），仅凭含标记会误判。 */
 export function hasSetup(text) {

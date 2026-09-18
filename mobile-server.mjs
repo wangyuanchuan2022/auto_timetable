@@ -28,7 +28,7 @@ import { readFile, writeFile, mkdir, open, rename } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { withSetup, stripSetup, hasSetup, isHostInjection } from './chat-setup.mjs';
+import { withSetup, stripSetup, hasSetup, isHostInjection, injectDecision, REINJECT_EVERY_DEFAULT } from './chat-setup.mjs';
 import TTOccur from './occur.js'; // 共享领域判定核心（与网页端 / Python timetable_core.py 同一语义）
 import {
   createRouteDispatcher, checkPin, clientIpOf, pinIsSet, hashPin, isLoopbackHostname,
@@ -179,6 +179,7 @@ async function ensureChatSession(settings) {
   const created = await dshRpc('session.create', { cwd: HERE });
   settings.chatSessionId = created.sessionId;
   settings.chatInited = false;
+  settings.chatMsgCount = 0; // 重注入计数随新会话清零
   await saveSettings(settings);
   await applyDefaultModel(created.sessionId, settings); // 修复：重建不丢已选模型
   // 修复：仍绑在旧会话上的手机 watch 连接立即改绑并收到 reset 帧，
@@ -251,10 +252,12 @@ async function resetChatSession(settings) {
   const oldSid = settings.chatSessionId;
   settings.chatSessionId = undefined;
   settings.chatInited = false;
+  settings.chatMsgCount = 0; // 重注入计数随新会话清零
   await saveSettings(settings);
   const created = await dshRpc('session.create', { cwd: HERE });
   settings.chatSessionId = created.sessionId;
   settings.chatInited = false;
+  settings.chatMsgCount = 0;
   await saveSettings(settings);
   await applyDefaultModel(created.sessionId, settings); // 修复：重建不丢已选模型
   notifySessionReset(oldSid, created.sessionId); // 旧会话的手机连接改绑 + 旧会话未答交互请求作废
@@ -288,8 +291,11 @@ async function chatOnce(message, images, onPartial) {
   const { sid, inited } = await ensureChatSession(settings);
   await ensureModelShape(sid, settings, images.length > 0);
   const marker = await lastSeqOf(sid);
-  // 新会话首条消息内联注入系统设定（见 chat-setup.mjs）；镜像回手机时剥离设定前缀
-  const plainText = inited ? String(message) : withSetup(message);
+  // 系统设定注入：新会话首条强制 + 每 N 条用户消息定期重注入（防长对话遗忘，见 chat-setup.mjs）；
+  // 镜像回手机时剥离设定前缀，重注入帧由 injected 标记显示「已注入系统提示词」提示
+  const msgCount = settings.chatMsgCount ?? 0;
+  const decision = injectDecision(inited, msgCount, settings.chatReinjectEvery ?? REINJECT_EVERY_DEFAULT);
+  const plainText = decision.inject ? withSetup(message) : String(message);
   const content = buildChatContent(plainText, images);
   try {
     await dshRpc('session.prompt', { sessionId: sid, mode: 'queue', content });
@@ -298,7 +304,9 @@ async function chatOnce(message, images, onPartial) {
     if (POISON_RE.test(String(err?.message ?? ''))) throw Object.assign(new Error(String(err.message)), { poisoned: true });
     throw err;
   }
-  if (!inited) { settings.chatInited = true; await saveSettings(settings); }
+  if (!inited) settings.chatInited = true;
+  settings.chatMsgCount = msgCount + 1;
+  await saveSettings(settings);
   onPartial?.('');
 
   // 轮询等待（chatWaitVerdict 裁决）：思考（reasoning-delta）/工具调用都会推进事件流 seq，
