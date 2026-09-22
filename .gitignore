@@ -37,3 +37,7 @@ schedule.json
 
 # 宿主预设压缩阈值补丁工作区（含用户私有预设备份与本机绝对路径，只留本地）
 .tools-backup-compaction/
+
+# IDE 与多会话产物（agent-out 含会话 id 与本机编排细节，勿提交）
+.idea/
+agent-out/
