@@ -1,9 +1,12 @@
 # dsh-worktable 安全补丁（本地加固）：/api/worktable/* 全端点 PIN 鉴权
 
-**针对版本**：dsh-worktable 0.2.3（`~/.dsh/profiles/web/node_modules/dsh-worktable/`）
-**状态**：已部署到本机 node_modules；**DSH web 重启后生效**（插件代码随宿主进程加载）
+**针对版本**：dsh-worktable **0.3.3**（上游 2026-09-06 发布；本补丁 2026-09-12 从 0.2.3 基线移植到 0.3.3）
+**落点**：本地 fork `D:\tools\deepsek_harness\dsh-worktable\lib\index.js`
+（profile `web` 依赖已改为 `link:D:/tools/deepsek_harness/dsh-worktable`，`node_modules\dsh-worktable` 是指向该目录的 junction —— 所以改动不会再被插件安装覆盖）
+**状态**：已落在 fork 目录；**DSH web 重启后生效**（插件代码随宿主进程加载）
+**补丁与更新流程**：见 `D:\tools\deepsek_harness\dsh-worktable\LOCAL-MODS.md`
 
-## 漏洞清单（0.2.3 原版全部无鉴权，服务绑 loopback 但本机任意网页可跨源打击）
+## 漏洞清单（0.3.3 原版同样全部无鉴权，服务绑 loopback 但本机任意网页可跨源打击）
 
 | 端点 | 危害 |
 | --- | --- |
@@ -30,37 +33,34 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `dsh-worktable.patch` | 对 0.2.3 原版 `lib/index.js` 的鉴权补丁 diff（+224/−2；应用演练已验证与补丁后文件逐字节一致） |
+| `dsh-worktable.v0.2.3.patch.bak` | **历史留档**：对 0.2.3 原版 `lib/index.js` 的鉴权补丁。现行补丁已迁至 fork：`D:\tools\deepsek_harness\dsh-worktable\patches\01-auth-pin.patch`（基线 0.3.3，同样 +224/−2；对 pristine 0.3.3 apply 后与 fork 内文件逐字节一致） |
 | `setup-pin.mjs` | 设置/重置 PIN：`node patches/dsh-worktable/setup-pin.mjs "<PIN>"`（不带参数则随机生成）；明文同时写入 `.mobile-srv/worktable-pin.txt`（gitignored） |
-| `test-auth.mjs` | 隔离验证（mock 宿主 + 重定向 auth 文件，不碰真实配置）：15 断言，`node patches/dsh-worktable/test-auth.mjs` |
+| `test-auth.mjs` | 隔离验证（mock 宿主 + 重定向 auth 文件，不碰真实配置）：15 断言，`node patches/dsh-worktable/test-auth.mjs`；fork 目录内有一份同源副本，可 `node test-auth.mjs` 直接跑 |
 | `.qrtest/worktable-auth.mjs` | 应急脚本共用鉴权助手（读明文 PIN → login 换 token；补丁未生效时返回 null 自动回退直连） |
 
-## 升级 dsh-worktable 后重放
+## 上游发新版后怎么更新
 
-`dsh plugin` 升级会覆盖 node_modules。补丁以 diff 形式存于 `dsh-worktable.patch`（基线 = 0.2.3 原版）。重放步骤：
+**不再往 `node_modules` 里重放补丁**（那是 0.2.3 时代的做法）。现行流程：在 fork 目录内更新上游代码 + 重放两个补丁 + 自检 + 重启。
+完整步骤、补丁清单与回滚路径见 **`D:\tools\deepsek_harness\dsh-worktable\LOCAL-MODS.md`**。
 
-1. 试运行（`--check` 只验不写；**必须带 `-c core.autocrlf=false`**，否则 autocrlf 会造成上下文不匹配而静默跳过）：
-   `cd "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-worktable\lib"`
-   `git -c core.autocrlf=false apply --check D:\tools\auto_timetable\patches\dsh-worktable\dsh-worktable.patch`
-2. 去掉 `--check` 实际应用（同目录同命令）；
-3. **应用后自检（必做）**——实测 autocrlf 造成的静默跳过是 exit 0 且无任何输出的，靠记住参数不够保险，用内容自检兜底（`authGate` 是补丁专属标识符，只出现在补丁新增行，原版没有）：
-   `if (Select-String -Path index.js -Pattern "authGate" -Quiet) { "PATCH OK" } else { "PATCH MISSING - 补丁被静默跳过，重跑第 2 步并确认 -c core.autocrlf=false"; exit 1 }`
-   必须看到 `PATCH OK` 才能继续；
-4. `node --check` 语法校验 + `node patches\dsh-worktable\test-auth.mjs`；
-5. 重启 DSH web；
-6. 活体验证（见下）。
+要点（避免踩过的坑）：
 
-若新版行号/结构变化导致 apply 失败：以新版原件为基线把鉴权块重新移植，再对两份文件重新生成 diff 替换本补丁。
+1. 重放补丁必须带 `-c core.autocrlf=false`，否则 Windows 上 autocrlf 会让 `git apply` 静默跳过（exit 0 且无输出）；
+2. 应用后必须做**内容自检**——`authGate`（鉴权）与 `data-ds-dark-theme`（控制台主题）是补丁专属标识符，只出现在新增行；
+3. `node --check lib/index.js lib/client.js` + `node test-auth.mjs`（应 15/15）；
+4. 补丁对新版 apply 失败时，以新版原件为基线重新移植改动，再重新生成补丁。
 
 ## DSH web 重启后的一次性活体验证
 
 ```powershell
-# 1) 无凭据 → 应 401/501（501=auth 未配置，先跑 setup-pin.mjs）
+# 1) 版本号应为 0.3.3
+node -e "fetch('http://127.0.0.1:3080/api/worktable/health').then(r=>r.text()).then(t=>console.log(t))"
+# 2) 无凭据 → 应 401（501=auth 未配置，先跑 setup-pin.mjs）
 node -e "fetch('http://127.0.0.1:3080/api/worktable/workspaces').then(r=>r.text()).then(t=>console.log(r.status,t.slice(0,80)))"
-# 2) 带 X-TT-Pin → 应 200
+# 3) 带 X-TT-Pin → 应 200
 $pin = Get-Content D:\tools\auto_timetable\.mobile-srv\worktable-pin.txt -Raw
 node -e "fetch('http://127.0.0.1:3080/api/worktable/workspaces',{headers:{'x-tt-pin':process.argv[1]}}).then(r=>console.log(r.status)).catch(e=>console.log(e))" $pin.Trim()
-# 3) .qrtest 应急脚本仍可用（自动带 token；schedule.html 保存/终端在浏览器登录一次后照常）
+# 4) .qrtest 应急脚本仍可用（自动带 token；schedule.html 保存/终端在浏览器登录一次后照常）
 node .qrtest\spawn-via-worktable.mjs
 ```
 
