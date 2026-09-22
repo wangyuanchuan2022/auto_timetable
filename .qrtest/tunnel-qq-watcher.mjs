@@ -18,13 +18,14 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url); // ESM 下裸 require 未定义会静默禁用代理路（2026-09-14 修复）
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TUNNEL_LOG = join(HERE, '..', '.mobile-srv', 'tunnel.log');
 const STATUS = 'http://127.0.0.1:3191/api/status';
-const SHIM = 'C:\\Users\\ycwan\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\start-cloudflared.cmd';
+const SHIM = join(homedir(), 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'start-cloudflared.cmd'); // 启动文件夹 shim（路径经 homedir() 拼接，避免硬编码用户名）
 const SPAWNER = join(HERE, 'spawn-via-worktable.mjs');
 const POLL_MS = 60_000;
 const MAX_MS = 24 * 3600_000;
@@ -40,7 +41,9 @@ const NOTICE_GRACE_MS = 2 * 60_000;                   // 源站侧故障宽限�
 
 let proxyAgent = null;
 try {
-  proxyAgent = new (require('C:/Users/ycwan/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/https-proxy-agent').HttpsProxyAgent)('http://127.0.0.1:7897');
+  // DSH 全局安装内的 https-proxy-agent（路径经 os.homedir() 拼接，避免硬编码用户名）
+  const dshAgent = join(homedir(), 'AppData', 'Roaming', 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', 'https-proxy-agent');
+  proxyAgent = new (require(dshAgent).HttpsProxyAgent)('http://127.0.0.1:7897');
 } catch {}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

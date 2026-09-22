@@ -31,6 +31,7 @@
 import { createRequire } from 'node:module';
 import { appendFileSync, statSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const STATUS = 'http://127.0.0.1:3191/api/status';
@@ -72,7 +73,9 @@ function decideTunnelKill(state, now = Date.now()) {
 const require = createRequire(import.meta.url); // ESM 下裸 require 未定义会静默禁用代理双路（2026-09-14 修复）
 let agent = null;
 try {
-  agent = new (require('C:/Users/ycwan/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/https-proxy-agent').HttpsProxyAgent)('http://127.0.0.1:7897');
+  // DSH 全局安装内的 https-proxy-agent（路径经 os.homedir() 拼接，避免硬编码用户名）
+  const dshAgent = join(homedir(), 'AppData', 'Roaming', 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', 'https-proxy-agent');
+  agent = new (require(dshAgent).HttpsProxyAgent)('http://127.0.0.1:7897');
 } catch {}
 
 /**
